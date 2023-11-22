@@ -153,32 +153,41 @@ inline bool string_equal_cstr(String a, char *b)
 
 int find_index_from_left(String a, char *_b)
 {
-    if (!_b) return false;
+    if (!_b) return -1;
     
     String b(_b);
-    if (b.count > a.count) return false;
+    if (b.count > a.count) return -1;
     
     // @Speed: SIMD or just align the memory properly
-    int len = a.count - b.count;
-    bool found = false;
-    for (int i = 0; i < len; i++) {
-        found = true;
-        for (int j = 0; j < b.count; j++) {
-            if (a.data[i+j] != b.data[j]) {
-                found = false;
-                break;
-            }
+    if (a.count == b.count) {
+        for (int i = 0; i < a.count; i++) {
+            if (a.data[i] != b.data[i]) return -1;
         }
         
-        if (found) return i;
-    } 
+        return 0;
+    } else {
+        int len = a.count - b.count;
+        bool found = false;
+        for (int i = 0; i < len; i++) {
+            found = true;
+            for (int j = 0; j < b.count; j++) {
+                if (a.data[i+j] != b.data[j]) {
+                    found = false;
+                    break;
+                }
+            }
+            
+            if (found) return i;
+        } 
+    
+    }
     
     return -1;
 }
 
 inline bool string_starts_with(String a, char *b)
 {
-    return find_index_from_left(a, b) != -1;
+    return find_index_from_left(a, b) == 0;
 }
 
 inline String string_trim_white_left(String s)

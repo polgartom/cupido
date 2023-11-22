@@ -68,8 +68,8 @@ typedef unsigned long u64;
 // }
 
 enum Mime_Type {
-    Mime_None = 0;
-    Mime_OctetStream;
+    Mime_None = 0,
+    Mime_OctetStream = 1
 };
 
 struct Request {
@@ -78,6 +78,7 @@ struct Request {
     u32 flags = 0;
     
     Mime_Type content_type;
+    s32 content_length = -1;
 };
 
 #define HEADER_PARSED 0b0001

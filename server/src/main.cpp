@@ -47,8 +47,6 @@ SOCKET createListeningSocket(int port) {
     WSACleanup(); \
     return 1;
 
-mime_type
-
 int main() {
     int port = 6969;
  
@@ -73,38 +71,61 @@ int main() {
         // Handle the connection (e.g., receive and send data)
         Request req = {0};
         req.socket = clientSocket; 
-        
         ZERO_MEMORY(req.temp_buf, 4096);
         
-        
         int r;
-        while (r = recv(clientSocket, buf_temp, 4096-1, 0)) {
+        while (r = recv(clientSocket, req.temp_buf, 4096-1, 0)) {
             if (r > 0) {
-                if (flags == 0) {
+                if (req.flags == 0) {
                     // Parse header
-                    auto buffer = String(buf_temp);
+                    auto buffer = String(req.temp_buf);
                     while (buffer.count) {
                         int index = find_index_from_left(buffer, CRLF);
                         if (index == -1) {
                             // Probably this is invalid at this point
+                            ASSERT(index != -1, "Invalid header!\n");
                             break;
                         }
                         
                         auto line = chop(buffer, index);
+                        // print("[line]: |" SFMT "|\n", SARG(line));
+                        
                         if (string_starts_with(line, "Content-Type: ")) {
-                            advance();
+                            auto content_type = advance(line, strlen("Content-Type: "));
+                            auto end_index = find_index_from_left(content_type, ";");
+                            if (end_index != -1) {
+                                content_type.count = end_index;
+                            }
+                            if (content_type == "application/octet-stream") {
+                                req.content_type = Mime_OctetStream;
+                            } else {
+                                printf("Content-Type not supported " SFMT " \n", SARG(content_type));
+                            }
+                            
+                            print("[content_type]: |" SFMT "| enum: %d\n", SARG(content_type), req.content_type);
                         }
-                        print("[line]: |" SFMT "|\n", SARG(line));
+                        else if (string_starts_with(line, "Content-Length: ")) {
+                            auto len = advance(line, strlen("Content-Length: ")); 
+                            auto rem = String();
+                            bool success = false;
+                            req.content_length = string_to_int(len, &success, &rem);
+                            ASSERT(success, "Invalid Content-Length. Given: " SFMT "\n", SARG(len));
+                        }
                         
                         buffer = advance(buffer, index+CRLF_LEN);
                         index = find_index_from_left(buffer, CRLF);
                         if (index == 0) {
-                            flags |= REQUEST_HEADER_DONE;
+                            req.flags |= HEADER_PARSED;
+                            buffer = advance(buffer, CRLF_LEN);
+                            print("remained_buf_size: %d ; req.content_type: %d ; req.content_lenght: %d\n", buffer.count, req.content_type, req.content_length);
+                            break;
                         }
-                    }                
+                    }
                 }
-                else if (flags & HEADER_PARSED) {
+                else if (req.flags & HEADER_PARSED) {
                     // Parse body
+                    print("parse body!\n");
+                    
                     break;                    
                 }
             } else if (r == 0) {
@@ -115,10 +136,7 @@ int main() {
                 break;
             }
             
-            ZERO_MEMORY(buf_temp, 2048);
         }
-        
-        
         
         // if (r > 0) {
         //     String s_buf(buf);
