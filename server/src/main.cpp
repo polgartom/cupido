@@ -47,6 +47,22 @@ SOCKET createListeningSocket(int port) {
     WSACleanup(); \
     return 1;
 
+bool read_socket(Request *req)
+{
+    ZERO_MEMORY(req->buf, 4096);
+    req->buf_len = recv(req->socket, req->buf, 4096-1, 0);
+    
+    if (r == 0) {
+        fprintf(stderr, "Connection is closed!");
+        return false;
+    } else if (r == SOCKET_ERROR) {
+        fprintf(stderr, "SOCKET ERROR - Connection is closed!");
+        return false;
+    }
+    
+    return true;
+}
+
 int main() {
     int port = 6969;
  
@@ -71,72 +87,76 @@ int main() {
         // Handle the connection (e.g., receive and send data)
         Request req = {0};
         req.socket = clientSocket; 
-        ZERO_MEMORY(req.temp_buf, 4096);
         
-        int r;
-        while (r = recv(clientSocket, req.temp_buf, 4096-1, 0)) {
-            if (r > 0) {
-                if (req.flags == 0) {
-                    // Parse header
-                    auto buffer = String(req.temp_buf);
-                    while (buffer.count) {
-                        int index = find_index_from_left(buffer, CRLF);
-                        if (index == -1) {
-                            // Probably this is invalid at this point
-                            ASSERT(index != -1, "Invalid header!\n");
-                            break;
-                        }
-                        
-                        auto line = chop(buffer, index);
-                        // print("[line]: |" SFMT "|\n", SARG(line));
-                        
-                        if (string_starts_with(line, "Content-Type: ")) {
-                            auto content_type = advance(line, strlen("Content-Type: "));
-                            auto end_index = find_index_from_left(content_type, ";");
-                            if (end_index != -1) {
-                                content_type.count = end_index;
-                            }
-                            if (content_type == "application/octet-stream") {
-                                req.content_type = Mime_OctetStream;
-                            } else {
-                                printf("Content-Type not supported " SFMT " \n", SARG(content_type));
-                            }
-                            
-                            print("[content_type]: |" SFMT "| enum: %d\n", SARG(content_type), req.content_type);
-                        }
-                        else if (string_starts_with(line, "Content-Length: ")) {
-                            auto len = advance(line, strlen("Content-Length: ")); 
-                            auto rem = String();
-                            bool success = false;
-                            req.content_length = string_to_int(len, &success, &rem);
-                            ASSERT(success, "Invalid Content-Length. Given: " SFMT "\n", SARG(len));
-                        }
-                        
-                        buffer = advance(buffer, index+CRLF_LEN);
-                        index = find_index_from_left(buffer, CRLF);
-                        if (index == 0) {
-                            req.flags |= HEADER_PARSED;
-                            buffer = advance(buffer, CRLF_LEN);
-                            print("remained_buf_size: %d ; req.content_type: %d ; req.content_lenght: %d\n", buffer.count, req.content_type, req.content_length);
-                            break;
-                        }
-                    }
-                }
-                else if (req.flags & HEADER_PARSED) {
-                    // Parse body
-                    print("parse body!\n");
-                    
-                    break;                    
-                }
-            } else if (r == 0) {
-                std::cout << "Connection is closed!" << std::endl;
-                break;
-            } else if (r == SOCKET_ERROR) {
-                std::cerr << "SOCKET ERROR - Connection is closed!" << std::endl;
+        if (!read_socket(&req)) {
+            EXIT();
+        }
+
+        auto buffer = String(req->buf);
+        while (buffer.count) {
+            int index = find_index_from_left(buffer, CRLF);
+            if (index == -1) {
+                // Probably this is invalid at this point
+                ASSERT(index != -1, "Invalid header!\n");
                 break;
             }
             
-        }
+            auto line = chop(buffer, index);
+            // print("[line]: |" SFMT "|\n", SARG(line));
+            
+            if (string_starts_with(line, "Content-Type: ")) {
+                auto content_type = advance(line, strlen("Content-Type: "));
+                auto end_index = find_index_from_left(content_type, ";");
+                if (end_index != -1) {
+                    content_type.count = end_index;
+                }
+                if (content_type == "application/octet-stream") {
+                    req.content_type = Mime_OctetStream;
+                } else {
+                    printf("Content-Type not supported " SFMT " \n", SARG(content_type));
+                }
+                
+                print("[content_type]: |" SFMT "| enum: %d\n", SARG(content_type), req.content_type);
+            }
+            else if (string_starts_with(line, "Content-Length: ")) {
+                auto len = advance(line, strlen("Content-Length: ")); 
+                auto rem = String();
+                bool success = false;
+                req.content_length = string_to_int(len, &success, &rem);
+                ASSERT(success, "Invalid Content-Length. Given: " SFMT "\n", SARG(len));
+            }
+            
+            buffer = advance(buffer, index+CRLF_LEN);
+            index = find_index_from_left(buffer, CRLF);
+            if (index == 0) {
+                req.flags |= HEADER_PARSED;
+                buffer = advance(buffer, CRLF_LEN);
+                print("remained_buf_size: %d ; req.content_type: %d ; req.content_lenght: %d\n", buffer.count, req.content_type, req.content_length);
+                break;
+            }
+        }        
+        
+        // int r;
+        // while (r = recv(clientSocket, req.buf, 4096-1, 0)) {
+        //     if (r > 0) {
+        //         if (req.flags == 0) {
+        //             // Parse header
+        //         }
+        //         else if (req.flags & HEADER_PARSED) {
+        //             // Parse body
+        //             print("parse body!\n");
+                    
+        //             break;                    
+        //         }
+        //     } else if (r == 0) {
+        //         std::cout << "Connection is closed!" << std::endl;
+        //         break;
+        //     } else if (r == SOCKET_ERROR) {
+        //         std::cerr << "SOCKET ERROR - Connection is closed!" << std::endl;
+        //         break;
+        //     }
+            
+        // }
         
         // if (r > 0) {
         //     String s_buf(buf);

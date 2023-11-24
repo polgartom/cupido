@@ -19,12 +19,13 @@
 #define SCHAR(s) (*s.data)
 
 struct String {
-    static constexpr const unsigned int byte_padding = 8;
+    // static constexpr const unsigned int byte_padding = 8;
 
     char *data = nullptr;
-    char *alloc_location = nullptr; // If allocated on the heap
     int count;
-    int refcount;
+    
+    char *alloc_location = nullptr; // If allocated on the heap
+    int allocated_size;
 
     String () {}
     
@@ -46,9 +47,23 @@ inline char schar(String &s)
     return *s.data;
 }
 
-inline String string_create(const char *data)
+inline String string_allocate(char *data)
 {
-    return String(data);
+    String s;
+    s.alloc_location = (char *)malloc(padded_size);
+    s.data           = (char *)memset(s.alloc_location, 0, (padded_size));
+    s.count          = size;
+
+    return s;
+}
+
+void free(String s)
+{
+    if (s.alloc_location != nullptr) {
+        free(s.alloc_location);
+        s.alloc_location = nullptr;
+        s.data = nullptr;
+    }
 }
 
 // inline String string_make_alloc(unsigned int size)
@@ -90,31 +105,25 @@ inline String chop(String s, unsigned int index)
 
 void join(String *a, char *b)
 {
-    assert(b != NULL);
-    auto b_len = strlen(b);
-    if (b_len == 0) return;
-    
-    auto new_count = a->count + b_len;
+    // @XXX: if we use the 'advance', then it'll cause memleak by incrementing the "data" pointer and decrementing
+    //  the "count" field, therefore this calculations aren't accurate!!!
+
+    assert(b);
+    if (*b == '\0') return; // strlen is 0
     
     if (a->alloc_location == nullptr) {
-        a->alloc_location = (char *)malloc(new_count);
-        memcpy(a->alloc_location, a->data, a->count);
+        a->alloc_location = (char *)malloc((a->count + b_len)*1.5);
+        memcpy(a->alloc_location, a->data, a->count); // copy it, if we have a constant string
         a->data = a->alloc_location;
-    } else {
-        a->alloc_location = (char *)realloc(a->alloc_location, new_count);
+        a->allocated_size = (a->count + b_len)*1.5;
+    } 
+    else if (a->count + b_len >= a->allocated_size) {
+        a->alloc_location = (char *)realloc(a->alloc_location, (a->count + b_len)*1.5);
+        a->allocated_size = (a->count + b_len)*1.5;
     }
     
     memcpy(a->data + a->count, b, b_len);
 }  
-
-void free(String s)
-{
-    if (s.alloc_location != nullptr) {
-        free(s.alloc_location);
-        s.alloc_location = nullptr;
-        s.data = nullptr;
-    }
-}
 
 inline char *string_to_cstr(String s)
 {

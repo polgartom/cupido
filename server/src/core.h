@@ -74,7 +74,8 @@ enum Mime_Type {
 
 struct Request {
     SOCKET socket;
-    char temp_buf[4096];
+    char buf[4096];
+    int buf_len;
     u32 flags = 0;
     
     Mime_Type content_type;
