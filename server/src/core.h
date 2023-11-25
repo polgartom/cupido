@@ -40,7 +40,6 @@ typedef unsigned long u64;
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr)[0])
 #define CSTR_LEN(x) (x != NULL ? strlen(x) : 0)
 #define XSTR(x) #x
-// #define STRUCT_COPY(dest, src) (memcpy(&dest, &src, sizeof(dest)))
 
 #include "new_string.h"
 #include "array.h"
@@ -49,34 +48,29 @@ typedef unsigned long u64;
 #define CRLF_LEN constexpr(strlen(CRLF))
 #define HTTP_1_1 "HTTP/1.1"
 
-// String read_entire_file(char *filename)
-// {
-//     FILE *fp = fopen(filename, "rb");
-//     ASSERT(fp, "Failed to open file! Filename: %s\n", filename);
-    
-//     fseek(fp, 0, SEEK_END);
-//     u32 fsize = ftell(fp);
-//     rewind(fp);
-    
-//     String s = string_make_alloc(fsize+1); // +1, because we'll insert a line break to deal with the EOF easier
-//     s.data[s.count-1] = '\n';
-    
-//     fread(s.data, fsize, 1, fp);
-//     fclose(fp);
-    
-//     return s;
-// }
+const int REQUEST_MAX_SIZE = (1024*1024*64);
 
 enum Mime_Type {
     Mime_None = 0,
     Mime_OctetStream = 1
 };
 
+enum Http_Request_State {
+    HTTP_STATE_CONN_RECEIVED = 0,
+    HTTP_STATE_HEADER_PARSED = 0b00000001,
+};
+
 struct Request {
     SOCKET socket;
-    char buf[4096];
+
+    String buf;
+    String raw_header;
+    String raw_body;    
+    
     int buf_len;
     u32 flags = 0;
+    
+    Http_Request_State state;
     
     Mime_Type content_type;
     s32 content_length = -1;

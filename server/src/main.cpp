@@ -37,6 +37,13 @@ SOCKET createListeningSocket(int port) {
         WSACleanup();
         return -1;
     }
+    
+    u64 blocking_is_enabled = 1;
+    int r = ioctlsocket(listenSocket, FIONBIO, &blocking_is_enabled);
+    if (r != NO_ERROR) {
+        printf("ioctlsocket failed with error: %ld\n", r);
+        return -1;
+    }
  
     return listenSocket;
 }
@@ -47,20 +54,11 @@ SOCKET createListeningSocket(int port) {
     WSACleanup(); \
     return 1;
 
-bool read_socket(Request *req)
+bool http_header_parse_line(String line, String *key, String *value)
 {
-    ZERO_MEMORY(req->buf, 4096);
-    req->buf_len = recv(req->socket, req->buf, 4096-1, 0);
-    
-    if (r == 0) {
-        fprintf(stderr, "Connection is closed!");
-        return false;
-    } else if (r == SOCKET_ERROR) {
-        fprintf(stderr, "SOCKET ERROR - Connection is closed!");
-        return false;
-    }
-    
-    return true;
+    bool success = true;
+    *key = split(line, ": ", value, &success);
+    return success;
 }
 
 int main() {
@@ -74,107 +72,133 @@ int main() {
     }
  
     std::cout << "Listening socket created. Socket descriptor: " << listenSocket << std::endl;
+
+    fd_set list = {0};
+    ZERO_MEMORY(&list, sizeof(fd_set));
  
-    // Wait for incoming connections
+    fd_set sl = {0};
+    FD_ZERO(&sl);
+    FD_SET(listenSocket, &sl);
+
+    TIMEVAL tt = {0};
+    tt.tv_sec = 60;
+ 
     while (true) {
+
+        // Wait for incoming connections
+        int sr = select(1, &sl, NULL, NULL, &tt);
+        if (sr == SOCKET_ERROR) {
+            std::cerr << "select() is failed. Error code: " << WSAGetLastError() << std::endl;
+            return 1;
+        } else if (sr == 0) {
+            std::cerr << "zero!!! the time limit expired!! WHAT?" << std::endl;
+            return 1;
+        }
+        
         // Accept a new connection
         SOCKET clientSocket = accept(listenSocket, NULL, NULL);
         if (clientSocket == INVALID_SOCKET) {
             std::cerr << "Failed to accept connection. Error code: " << WSAGetLastError() << std::endl;
             EXIT();
         }
+
+        FD_ZERO(&list);
+        FD_SET(clientSocket, &list);
  
-        // Handle the connection (e.g., receive and send data)
         Request req = {0};
-        req.socket = clientSocket; 
+        ZERO_MEMORY(&req, sizeof(Request));
+        req.socket = clientSocket;
         
-        if (!read_socket(&req)) {
-            EXIT();
-        }
+        char tmp_buf[4096] = {0};
 
-        auto buffer = String(req->buf);
-        while (buffer.count) {
-            int index = find_index_from_left(buffer, CRLF);
-            if (index == -1) {
-                // Probably this is invalid at this point
-                ASSERT(index != -1, "Invalid header!\n");
-                break;
-            }
+        while (true) {
+            int err;
+            ZERO_MEMORY(tmp_buf, sizeof(tmp_buf));
             
-            auto line = chop(buffer, index);
-            // print("[line]: |" SFMT "|\n", SARG(line));
+            // int sr = select(1, &list, NULL, NULL, &tt);
+            // err = WSAGetLastError();
+            int r = recv(req.socket, tmp_buf, 4096-1, 0);
+            err = WSAGetLastError();
+            // print("> recv: %d ; err: %d\n", r, err);
             
-            if (string_starts_with(line, "Content-Type: ")) {
-                auto content_type = advance(line, strlen("Content-Type: "));
-                auto end_index = find_index_from_left(content_type, ";");
-                if (end_index != -1) {
-                    content_type.count = end_index;
-                }
-                if (content_type == "application/octet-stream") {
-                    req.content_type = Mime_OctetStream;
-                } else {
-                    printf("Content-Type not supported " SFMT " \n", SARG(content_type));
-                }
-                
-                print("[content_type]: |" SFMT "| enum: %d\n", SARG(content_type), req.content_type);
+            if (r == 0) {
+                fprintf(stderr, "Connection is closed!");
+                return false;
+            } else if (err == WSAEWOULDBLOCK) {
+                // print("WSAEWOULDBLOCK\n");
+                continue;            
+            } else if (r == SOCKET_ERROR) {
+                fprintf(stderr, "SOCKET ERROR - Connection is closed!");
+                std::cerr << "SOCKET ERROR. Error code: " <<  WSAGetLastError() << std::endl;
+                return false;
             }
-            else if (string_starts_with(line, "Content-Length: ")) {
-                auto len = advance(line, strlen("Content-Length: ")); 
-                auto rem = String();
-                bool success = false;
-                req.content_length = string_to_int(len, &success, &rem);
-                ASSERT(success, "Invalid Content-Length. Given: " SFMT "\n", SARG(len));
-            }
+
+            join(&req.buf, tmp_buf);
             
-            buffer = advance(buffer, index+CRLF_LEN);
-            index = find_index_from_left(buffer, CRLF);
-            if (index == 0) {
-                req.flags |= HEADER_PARSED;
-                buffer = advance(buffer, CRLF_LEN);
-                print("remained_buf_size: %d ; req.content_type: %d ; req.content_lenght: %d\n", buffer.count, req.content_type, req.content_length);
-                break;
-            }
-        }        
-        
-        // int r;
-        // while (r = recv(clientSocket, req.buf, 4096-1, 0)) {
-        //     if (r > 0) {
-        //         if (req.flags == 0) {
-        //             // Parse header
-        //         }
-        //         else if (req.flags & HEADER_PARSED) {
-        //             // Parse body
-        //             print("parse body!\n");
+            if (!(req.state & HTTP_STATE_HEADER_PARSED)) {
+                // Locate end of the http header    
+                int end = find_index_from_left(req.buf, CRLF CRLF);
+                if (end != -1) {
+                    req.raw_header = chop(req.buf, end, &req.raw_body);
+                    req.raw_body = advance(req.raw_body, strlen(CRLF CRLF));
                     
-        //             break;                    
-        //         }
-        //     } else if (r == 0) {
-        //         std::cout << "Connection is closed!" << std::endl;
-        //         break;
-        //     } else if (r == SOCKET_ERROR) {
-        //         std::cerr << "SOCKET ERROR - Connection is closed!" << std::endl;
-        //         break;
-        //     }
-            
-        // }
-        
-        // if (r > 0) {
-        //     String s_buf(buf);
-        //     int pos = string_contains(s_buf, "\r\n");
-        //     if (pos != -1) {
-        //         String remain = advance(s_buf, pos+strlen("\r\n"));
-        //         s_buf.count = pos; 
-        //         print("[line]:   |%s|\n", to_cstr(s_buf));
-        //         print("[remain]: |%s|\n", to_cstr(remain));
-        //     } else {
-        //         print("Invalid header sent!\n");
-        //     }
+                    print("> buf: %d ; header: %d ; body: %d\n", req.buf.count, req.raw_header.count, req.raw_body.count);
+                    req.state = HTTP_STATE_HEADER_PARSED;
+                    
+                    bool ok = true;
+                    String h = req.raw_header;
+                    String line; 
+                    String key; 
+                    String val;
+                    line = split(h, CRLF, &h, &ok);
+                    assert(ok);
+                    
+                    // @Todo: Handle first line: GET / HTTP/1.1
+                    print("> " SFMT "\n", SARG(line));
+                    
+                    while (true) {
+                        line = split(h, CRLF, &h, &ok);
+                        if (!ok) break;
 
-        //     printf("\n\n---------------------------\n\n");
-        // }
-        // if (r == 0) {
-        // } else if (r == SOCKET_ERROR) {
-        // }
+                        // print("line: " SFMT "\n", SARG(line));
+
+                        ok = http_header_parse_line(line, &key, &val);
+                        ASSERT(ok, "Failed to parse header line: " SFMT "\n", SARG(line));
+                        
+                        if (key == "Content-Type") {
+                            bool other_half_is_set = false;
+                            String other_half;
+                            val = split(val, "; ", &other_half, &other_half_is_set);
+                            printf("Content-Type: " SFMT " \n", SARG(val));
+                            if (other_half_is_set) {
+                                // @Todo
+                                // printf("Other half of Content-Type: |" SFMT "|\n", SARG(other_half));
+                            }
+                            
+                            if (val == "application/octet-stream") {
+                                req.content_type = Mime_OctetStream;
+                            } else {
+                                printf("Content-Type not supported: " SFMT " \n", SARG(val));
+                            }
+                            
+                        } else if (key == "Content-Length") {
+                            bool success = true;
+                            String rem;
+                            req.content_length = string_to_int(val, &success, &rem);
+                            ASSERT(success, "Failed to convert string to int! Line: |" SFMT "|\n", SARG(line));
+                            printf("Content-Length: %d\n", req.content_length);
+                        }
+
+                        print("> key: |" SFMT "| ; val: |" SFMT "| \n", SARG(key), SARG(val));
+                    }
+                    
+                }
+            } 
+            else if (req.state & HTTP_STATE_HEADER_PARSED) {
+                
+            }
+            
+        }   
  
         // Close the client socket
         closesocket(clientSocket);

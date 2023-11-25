@@ -21,18 +21,22 @@
 struct String {
     // static constexpr const unsigned int byte_padding = 8;
 
+    char *_sdata = nullptr; // the 'data' ptr can be vary, so we keep the initial data ptr
     char *data = nullptr;
     int count;
     
     char *alloc_location = nullptr; // If allocated on the heap
     int allocated_size;
+    int used_size;
 
     String () {}
     
     String (const char *s)
     {
-        data  = (char *)s;
-        count = strlen(s);
+        data      = (char *)s;
+        _sdata    = data;
+        count     = strlen(s);
+        used_size = count;
     }
 
     inline void operator=(const char *rhs)
@@ -40,21 +44,25 @@ struct String {
         String new_s = String(rhs);
         memcpy(&new_s, this, sizeof(String));
     }
+    
+    void to_heap()
+    {
+        if (!alloc_location || used_size == 0) return;
+        
+        alloc_location = (char *)malloc(used_size);
+        assert(alloc_location);
+        memcpy(alloc_location, _sdata, used_size);
+
+        int offset = data - _sdata; 
+        _sdata = alloc_location;
+        data = _sdata + offset;
+    }
+    
 };
 
 inline char schar(String &s)
 {
     return *s.data;
-}
-
-inline String string_allocate(char *data)
-{
-    String s;
-    s.alloc_location = (char *)malloc(padded_size);
-    s.data           = (char *)memset(s.alloc_location, 0, (padded_size));
-    s.count          = size;
-
-    return s;
 }
 
 void free(String s)
@@ -63,21 +71,45 @@ void free(String s)
         free(s.alloc_location);
         s.alloc_location = nullptr;
         s.data = nullptr;
+        s._sdata = nullptr;
+        s.count = 0;
+        s.used_size = 0;
     }
 }
 
-// inline String string_make_alloc(unsigned int size)
-// {   
-//     auto padded_size = (String::byte_padding - (size % String::byte_padding)) + size;
-//     assert((padded_size % String::byte_padding) == 0);
-
-//     String s;
-//     s.alloc_location = (char *)malloc(padded_size);
-//     s.data           = (char *)memset(s.alloc_location, 0, (padded_size));
-//     s.count          = size;
+int find_index_from_left(String a, char *_b)
+{
+    if (_b == NULL) return -1;
     
-//     return s;
-// }
+    String b(_b);
+    if (b.count > a.count) return -1;
+    
+    // @Speed: SIMD or just align the memory properly
+    if (a.count == b.count) {
+        for (int i = 0; i < a.count; i++) {
+            if (a.data[i] != b.data[i]) return -1;
+        }
+        return 0;
+    } else {
+        for (int i = 0; i < a.count; i++) {
+            if (a.data[i] == b.data[0]) {
+                if (i + b.count-1 >= a.count) return -1;
+                
+                for (int j = 0; j < b.count; j++) {
+                    if (a.data[i+j] != b.data[j]) {
+                        goto _not_found;
+                    }
+                }
+                
+                return i;
+            }
+            
+            _not_found:;
+        }
+    }
+    
+    return -1;
+}
 
 inline String advance(String s, unsigned int step = 1)
 {
@@ -85,7 +117,7 @@ inline String advance(String s, unsigned int step = 1)
 
     s.data   = s.data + step; 
     s.count -= step;
-        
+    
     return s;
 }
 
@@ -96,34 +128,67 @@ inline void advance(String *s, unsigned int step = 1)
     s->count = r.count;
 }
 
-inline String chop(String s, unsigned int index)
+inline String chop(String s, int at, String *rem = NULL)
 {
-    assert(s.count > index);
-    s.count = index;
+    assert(s.count > at);
+    
+    if (rem) {
+        *rem = advance(s, at);
+    }
+    
+    s.count = at;
+    
     return s;
+}
+
+inline String split(String s, char *delimeter, String *rem = nullptr, bool *success = nullptr)
+{
+    assert(delimeter);
+    
+    int at = find_index_from_left(s, delimeter);
+    if (at == -1) {
+        if (success != nullptr) *success = false;
+        return s;
+    }
+    
+    String r = chop(s, at, rem);
+    if (rem) *rem = advance(*rem, strlen(delimeter));
+    if (success != nullptr) *success = true;
+    
+    return r;
 }
 
 void join(String *a, char *b)
 {
-    // @XXX: if we use the 'advance', then it'll cause memleak by incrementing the "data" pointer and decrementing
-    //  the "count" field, therefore this calculations aren't accurate!!!
-
     assert(b);
-    if (*b == '\0') return; // strlen is 0
+    auto b_len = strlen(b);
+    if (b_len == 0) return;
     
     if (a->alloc_location == nullptr) {
-        a->alloc_location = (char *)malloc((a->count + b_len)*1.5);
-        memcpy(a->alloc_location, a->data, a->count); // copy it, if we have a constant string
-        a->data = a->alloc_location;
-        a->allocated_size = (a->count + b_len)*1.5;
-    } 
-    else if (a->count + b_len >= a->allocated_size) {
-        a->alloc_location = (char *)realloc(a->alloc_location, (a->count + b_len)*1.5);
-        a->allocated_size = (a->count + b_len)*1.5;
+        a->to_heap();
     }
     
-    memcpy(a->data + a->count, b, b_len);
-}  
+    if (a->used_size + b_len >= a->allocated_size) {
+        int offset = 0;
+        if (a->alloc_location) {
+            offset = a->data - a->alloc_location;
+        }
+        
+        int new_size = (a->used_size + b_len) * 1.5;
+    
+        auto old_ptr = a->alloc_location;
+        a->alloc_location = (char *)realloc(a->alloc_location, new_size);
+        assert(a->alloc_location);
+        a->allocated_size = new_size;
+        
+        a->_sdata = a->alloc_location;
+        a->data = a->_sdata + offset;        
+    }
+    
+    memcpy(a->data + a->used_size, b, b_len);
+    a->count += b_len;
+    a->used_size += b_len;
+}
 
 inline char *string_to_cstr(String s)
 {
@@ -157,41 +222,7 @@ bool string_equal(String a, String b)
 
 inline bool string_equal_cstr(String a, char *b)
 {
-    return string_equal(a, string_create(b));
-}
-
-int find_index_from_left(String a, char *_b)
-{
-    if (!_b) return -1;
-    
-    String b(_b);
-    if (b.count > a.count) return -1;
-    
-    // @Speed: SIMD or just align the memory properly
-    if (a.count == b.count) {
-        for (int i = 0; i < a.count; i++) {
-            if (a.data[i] != b.data[i]) return -1;
-        }
-        
-        return 0;
-    } else {
-        int len = a.count - b.count;
-        bool found = false;
-        for (int i = 0; i < len; i++) {
-            found = true;
-            for (int j = 0; j < b.count; j++) {
-                if (a.data[i+j] != b.data[j]) {
-                    found = false;
-                    break;
-                }
-            }
-            
-            if (found) return i;
-        } 
-    
-    }
-    
-    return -1;
+    return string_equal(a, String(b));
 }
 
 inline bool string_starts_with(String a, char *b)
