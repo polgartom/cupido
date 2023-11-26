@@ -192,18 +192,10 @@ void join(String *a, char *b)
 
 inline char *string_to_cstr(String s)
 {
-    char *c_str = (char *)memset(((char *)malloc(s.count+1)), 0, (s.count+1));
-    memcpy(c_str, s.data, s.count);
-    return c_str;
-}
-
-inline char *to_cstr(String s)
-{
     char *c_str = (char *)malloc(s.count+1);
-    assert(c_str != NULL);
-    memset(c_str, 0, s.count+1);
+    assert(c_str);
+    ZERO_MEMORY(c_str, s.count+1);
     memcpy(c_str, s.data, s.count);
-    
     return c_str;
 }
 
@@ -230,6 +222,14 @@ inline bool string_starts_with(String a, char *b)
     return find_index_from_left(a, b) == 0;
 }
 
+inline bool string_starts_with_and_step(String *s, char *b)
+{
+    int i = find_index_from_left(*s, b);
+    if (i != 0) return false;
+    *s = advance(*s, strlen(b));
+    return true;
+}
+
 inline String string_trim_white_left(String s)
 {
     while (s.count && IS_SPACE(*s.data)) {
@@ -252,45 +252,31 @@ inline String string_trim_white_right(String s)
 inline String string_trim_white(String s)
 {
     s = string_trim_white_left(s);
-    s = string_trim_white_right(s);    
+    s = string_trim_white_right(s);
     
     return s;
 }
 
-int string_to_int(String s, bool *success, String *remained)
+inline int string_to_int(String s, String *remained = nullptr, int base = 0)
 {
-    assert(success != NULL);
-    if (s.count == 0 || !s.data) {
-        *success = false;
-        return 0.0f;
-    }
-
-    char *o = remained->data;
-    int i = strtol(s.data, &remained->data, 0);
-
-    int bef = remained->count;    
-    remained->count -= remained->data - o;
-
-    *success = true;
-    return i;
+    // @Todo: return the remained data
+    // @Speed: Make sure the s.data+1 is '\0'
+    char *temp = string_to_cstr(s);
+    int r = strtol(s.data, nullptr, base);
+    free(temp);
+    
+    return r;
 }
 
-float string_to_float(String s, bool *success, String *remained)
+inline float string_to_float(String s, String *remained = nullptr)
 {
-    assert(success != NULL);
-    if (s.count == 0 || !s.data) {
-        *success = false;
-        return 0.0f;
-    }
+    // @Todo: return the remained data
+    // @Speed: Make sure the s.data+1 is '\0'
+    char *temp = string_to_cstr(s);
+    float r = strtof(temp, nullptr);
+    free(temp);
 
-    char *o = remained->data;
-    float f = strtof(s.data, &remained->data);
-
-    int bef = remained->count;    
-    remained->count -= remained->data - o;
-
-    *success = true;    
-    return f;
+    return r;
 }
 
 inline String string_eat_until(String s, const char c)

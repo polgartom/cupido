@@ -2,7 +2,7 @@
 
 #define print printf
  
-SOCKET createListeningSocket(int port) {
+SOCKET create_listening_socket(int port) {
     // Initialize Winsock
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -54,18 +54,50 @@ SOCKET createListeningSocket(int port) {
     WSACleanup(); \
     return 1;
 
-bool http_header_parse_line(String line, String *key, String *value)
+inline bool http_header_parse_line(String line, String *key, String *value)
 {
     bool success = true;
     *key = split(line, ": ", value, &success);
     return success;
 }
 
+Mime_Type content_type_str_to_enum(String s)
+{
+    bool ok = true;
+    String right;
+    String left = split(s, "; ", &right, &ok);
+    
+    #define RET_IF_MATCH(_cstr, _enum) if (left == _cstr) return _enum;
+        
+    if (string_starts_with_and_step(&left, "application/")) {
+        RET_IF_MATCH("json",         Mime_App_Json);
+        RET_IF_MATCH("octet-stream", Mime_App_OctetStream);
+        RET_IF_MATCH("pdf",          Mime_App_Pdf);
+        RET_IF_MATCH("gzip",         Mime_App_Gzip);
+        RET_IF_MATCH("x-tar",        Mime_App_Tar);
+        RET_IF_MATCH("vnd.rar",      Mime_App_Rar);
+    } 
+    else if (string_starts_with_and_step(&left, "text/")) {
+        RET_IF_MATCH("plain", Mime_Text_Plain);
+        RET_IF_MATCH("html",  Mime_Text_Html);
+    }
+    else if (string_starts_with_and_step(&left, "image/")) {
+        RET_IF_MATCH("jpeg", Mime_Image_Jpg);
+        RET_IF_MATCH("png",  Mime_Image_Png);
+        RET_IF_MATCH("gif",  Mime_Image_Gif);
+        RET_IF_MATCH("webp",  Mime_Image_Webp);
+    }
+    
+    #undef RET
+    
+    return Mime_None;
+}
+
 int main() {
     int port = 6969;
  
     // Create a listening socket
-    SOCKET listenSocket = createListeningSocket(port);
+    SOCKET listenSocket = create_listening_socket(port);
     if (listenSocket == -1) {
         std::cerr << "Failed to create listening socket." << std::endl;
         return 1;
@@ -142,25 +174,42 @@ int main() {
                     req.raw_header = chop(req.buf, end, &req.raw_body);
                     req.raw_body = advance(req.raw_body, strlen(CRLF CRLF));
                     
+                    print("\n\n---HTTP_HEADER--------\n\n");
+                    print(SFMT, SARG(req.raw_header));
+                    print("\n\n---HTTP_HEADER_END----\n\n");
+
                     print("> buf: %d ; header: %d ; body: %d\n", req.buf.count, req.raw_header.count, req.raw_body.count);
                     req.state = HTTP_STATE_HEADER_PARSED;
                     
                     bool ok = true;
+                    bool has_more_line = true;
                     String h = req.raw_header;
                     String line; 
                     String key; 
                     String val;
-                    line = split(h, CRLF, &h, &ok);
-                    assert(ok);
+                    line = split(h, CRLF, &h, &has_more_line);
+                    assert(has_more_line);
                     
-                    // @Todo: Handle first line: GET / HTTP/1.1
-                    print("> " SFMT "\n", SARG(line));
+                    if (string_starts_with_and_step(&line, "GET ")) {
+                        req.method = Http_Method_Get;
+                    } else if (string_starts_with_and_step(&line, "POST ")) {
+                        req.method = Http_Method_Post;
+                    } else if (string_starts_with_and_step(&line, "DELETE ")) {
+                        req.method = Http_Method_Delete;
+                    } else {
+                        ASSERT(0, "Http method not supported! -> " SFMT "\n", SARG(line));
+                    }
                     
-                    while (true) {
-                        line = split(h, CRLF, &h, &ok);
-                        if (!ok) break;
-
-                        // print("line: " SFMT "\n", SARG(line));
+                    {
+                        req.path = split(line, " ", &line, &ok);
+                        ASSERT(ok, "Invalid http header! Malformed path. -> " SFMT "\n", SARG(line)); // can be?
+                        ASSERT(line == HTTP_1_1, "Invalid http header! Protocol not supported. -> " SFMT "\n", SARG(line));
+                        req.protocol = line;
+                    }
+                    
+                    while (has_more_line) {
+                        line = split(h, CRLF, &h, &has_more_line);
+                        ASSERT(line.count != 0, "Invalid http header!"); // can be?
 
                         ok = http_header_parse_line(line, &key, &val);
                         ASSERT(ok, "Failed to parse header line: " SFMT "\n", SARG(line));
@@ -169,34 +218,35 @@ int main() {
                             bool other_half_is_set = false;
                             String other_half;
                             val = split(val, "; ", &other_half, &other_half_is_set);
-                            printf("Content-Type: " SFMT " \n", SARG(val));
                             if (other_half_is_set) {
                                 // @Todo
                                 // printf("Other half of Content-Type: |" SFMT "|\n", SARG(other_half));
                             }
                             
-                            if (val == "application/octet-stream") {
-                                req.content_type = Mime_OctetStream;
-                            } else {
+                            req.content_type = content_type_str_to_enum(val);
+                            if (req.content_type == Mime_None) {
                                 printf("Content-Type not supported: " SFMT " \n", SARG(val));
                             }
                             
-                        } else if (key == "Content-Length") {
-                            bool success = true;
-                            String rem;
-                            req.content_length = string_to_int(val, &success, &rem);
-                            ASSERT(success, "Failed to convert string to int! Line: |" SFMT "|\n", SARG(line));
-                            printf("Content-Length: %d\n", req.content_length);
+                            // printf("Content-Type: " SFMT " (%d)\n", SARG(val), req.content_type);
+                        } 
+                        else if (key == "Content-Length") {
+                            req.content_length = string_to_int(val);
+                            ASSERT(errno == 0, "Failed to convert string to int! Line: |" SFMT "|\n", SARG(line));
+                            // printf("Content-Length: %d\n", req.content_length);
                         }
 
                         print("> key: |" SFMT "| ; val: |" SFMT "| \n", SARG(key), SARG(val));
                     }
                     
                 }
+            
+                print("");
             } 
             else if (req.state & HTTP_STATE_HEADER_PARSED) {
                 
             }
+            
             
         }   
  

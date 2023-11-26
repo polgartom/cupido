@@ -50,9 +50,43 @@ typedef unsigned long u64;
 
 const int REQUEST_MAX_SIZE = (1024*1024*64);
 
+enum Http_Method {
+    Http_Method_None = 0,
+
+    Http_Method_Get,
+    Http_Method_Post,
+    Http_Method_Delete,
+    
+    Http_Method_Count,
+}; 
+
 enum Mime_Type {
     Mime_None = 0,
-    Mime_OctetStream = 1
+        
+    Mime_App_OctetStream,
+    Mime_App_Zip,
+    Mime_App_Gzip,
+    Mime_App_Tar,
+    Mime_App_Rar,
+    Mime_App_Pdf,
+    Mime_App_Json,
+    
+    Mime_Text_Plain,
+    Mime_Text_Html,
+    
+    Mime_Image_Jpg,
+    Mime_Image_Png,
+    Mime_Image_Gif,
+    Mime_Image_Webp,
+    
+    Mime_Audio_Mp3,
+    Mime_Audio_Wav,
+    Mime_Audio_Webm,
+    
+    Mime_Video_Mp4,
+    Mime_Video_Webm,
+    
+    Mime_Count
 };
 
 enum Http_Request_State {
@@ -65,18 +99,20 @@ struct Request {
 
     String buf;
     String raw_header;
-    String raw_body;    
+    String raw_body;
     
     int buf_len;
     u32 flags = 0;
-    
+
+    // @Todo: Union http stuffs? 
     Http_Request_State state;
+    
+    Http_Method method;
+    String path;
+    String protocol;
     
     Mime_Type content_type;
     s32 content_length = -1;
 };
-
-#define HEADER_PARSED 0b0001
-#define BODY_PARSED   0b0010
 
 #endif 
