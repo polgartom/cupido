@@ -89,7 +89,7 @@ struct Request {
     
     bool connected;
     bool should_close;
-    SOCKET socket;
+    SOCKET socket = INVALID_SOCKET;
 
     String raw_body;
 
@@ -104,12 +104,14 @@ struct Request {
     s32 content_length = -1;
     
     // Buffer buf;
+    char header_buf[4096];
     char buf[4096];
 };
 
 struct Server {
-    SOCKET socket;
+    SOCKET socket = INVALID_SOCKET;
     int port;
+    bool running = false; 
     
     fd_set waiting; // @Cleanup @Temporary
     TIMEVAL waiting_ttl;
@@ -145,7 +147,7 @@ Mime_Type content_type_str_to_enum(String s)
         RET_IF_MATCH("webp",  Mime_Image_Webp);
     }
     
-    #undef RET
+    #undef RET_IF_MATCH
     
     return Mime_None;
 }

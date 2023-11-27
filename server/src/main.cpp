@@ -46,7 +46,7 @@ SOCKET create_listening_socket(int port) {
     return listenSocket;
 }
 
-bool init_server(Server *s, int port)
+bool server_create(Server *s, int port)
 {
     s->socket = create_listening_socket(port);
     if (s->socket == INVALID_SOCKET) {
@@ -68,6 +68,25 @@ bool init_server(Server *s, int port)
     return true;
 }
 
+void server_shutdown(Server *s, bool force = false)
+{
+    printf("[server]: Shutdown...\n");
+
+    if (s->running) {
+        ASSERT(closesocket(s->socket) == 0, "Failed to close server (listen socket) socket!\n");
+        printf("[server]: Socket closed!\n");
+    }
+        
+    if (force) {
+        printf("[server]: WSACleanup()\n");
+        ASSERT(WSACleanup() != 0, "Failed to run WSACleanup(). Error code: %d\n", WSAGetLastError());
+    }
+    
+    s->running = false;
+    
+    printf("[server]: Stopped!\n");
+}
+
 inline bool http_header_parse_line(String line, String *key, String *value)
 {
     bool success = true;
@@ -75,19 +94,26 @@ inline bool http_header_parse_line(String line, String *key, String *value)
     return success;
 }
 
-inline void close_client_connection(Server *s, Request *c)
+inline void close_client(Server *s, Request *c)
 {
     if (c->connected) {
-        closesocket(c->socket);
+        ASSERT(closesocket(c->socket) == 0, "Failed to close the client socket!", c->socket);
         s->free_clients[c->id] = true;
+        
+        printf("[client(%lld)]: Connection closed!\n", c->socket);
     }
+    
     ZERO_MEMORY(c, sizeof(Request));
+    
+    printf("[request(%p)]: Cleared up!\n", c);
 }
 
-bool send(Request *c, String *buffer, s64 at_once = -1)
+bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
 {
     if (!c->connected) return false;
     if (at_once <= 0) at_once = buffer->count;
+    
+    printf("[send/start]: len: %d ; at_once: %d\n", buffer->count, at_once);
     
     s64 remain = buffer->count;
     s64 sent  = 0;
@@ -96,40 +122,40 @@ bool send(Request *c, String *buffer, s64 at_once = -1)
     while (remain != 0) {
         sent = send(c->socket, buffer->data, at_once, 0);
         err = WSAGetLastError();
-        print("> sent: %d ; err: %d\n", sent, err);
         
         if (sent == 0) {
             fprintf(stderr, "Connection is closed!\n");
             return false;
         } else if (err == WSAEWOULDBLOCK) {
-            print("[send]: WSAEWOULDBLOCK\n");
+            print("[send/progress]: WSAEWOULDBLOCK\n");
             continue;        
         } else if (sent == SOCKET_ERROR) {
             // It is valid??
             fprintf(stderr, "SOCKET ERROR. Error code: %d\n", WSAGetLastError());
             return false;
         }
-    
-        printf("[send]: progress: %d/%d ; rate: %d\n", remain, buffer->count, at_once);
-    
+
         remain -= sent;
+        
+        printf("[send/progress]: sent: %d ; remain: %d ; rate: %d\n", sent, remain, buffer->count, at_once);
+        
         if (remain < 0) {
             ASSERT(remain < 0, "How can this happen?");
             return false;
         }
     }
     
-    printf("[send]: DONE!\n");
+    printf("[send/done]: OK!\n");
     
     return true;
 }
 
 bool http_parse_header(Request *c)
 {
+    auto buf_size = sizeof(c->header_buf);
     while (1) {
-        int r = recv(c->socket, c->buf, 4096-1, 0);
+        int r = recv(c->socket, c->header_buf, buf_size-1, 0);
         int err = WSAGetLastError();
-        // print("> recv: %d ; err: %d\n", r, err);
     
         if (r == 0) {
             fprintf(stderr, "Connection is closed!");
@@ -143,7 +169,8 @@ bool http_parse_header(Request *c)
             return false;
         }
         
-        String buf = String(c->buf, r);
+        // @Speed
+        String buf = String(c->header_buf);
         int end = find_index_from_left(buf, CRLF CRLF);
         if (end == -1) {
             printf("Not found the end of the http header, probably isn't arrived. Size: %d\n", r);
@@ -178,8 +205,8 @@ inline void http_header_finish(String *buf)
 
 String http_header_create(Http::Response_Status status)
 {
-    String h;
-    alloc(&h, 4096);
+    String h = string_create(4096);
+
     switch (status) {
         case Http::OK:
             http_header_append(&h, HTTP_1_1 " 200 Ok");
@@ -194,8 +221,6 @@ String http_header_create(Http::Response_Status status)
             ASSERT(0, "TODO more http header!\n");
     }
 
-    String x;
-    
     return h;
 }
 
@@ -213,7 +238,10 @@ String http_header_create(Http::Response_Status status)
 
 void server_listen(Server *s)
 {
-    while (true) {
+    s->running = true;
+    printf("Server listening at %d...\n", s->port);
+
+    while (s->running) {
         SERVER_WAIT_FOR_INCOMMING_CONNECTIONS(s);
 
         Request *c = nullptr;
@@ -240,11 +268,11 @@ void server_listen(Server *s)
         bool success = http_parse_header(c);
         if (!success) {
             fprintf(stderr, "Failed to parse http header!\n");
-            close_client_connection(s, c);
+            close_client(s, c);
             continue;
         }
         
-        String header = http_header_create(Http::NOT_FOUND);
+        String header = http_header_create(Http::OK);
         http_header_append(&header, "Content-Length: 0");
         http_header_finish(&header);
         
@@ -252,196 +280,20 @@ void server_listen(Server *s)
         print(SFMT, SARG(header));
         print("\n\n---RESPONSE_END--------\n\n");
         
-        send(c, &header);
+        success = send_to_client(c, &header);
         free(&header);
         
-        close_client_connection(s, c);
+        close_client(s, c);
     }
 }
 
-int main() 
+int main(int argc, char **argv)
 {
     Server s;
     int port = 6969;
-    bool success = init_server(&s, port);
+    bool success = server_create(&s, port);
     ASSERT(success, "Failed to create server! Port: %d\n", port);
-    printf("Server listening at %d...\n", port);
-
     server_listen(&s);
 
-    closesocket(s.socket);
-    WSACleanup();
-
     return 0;
-
-    // while (true) {
-
-    //     // FD_ZERO(&list);
-    //     // FD_SET(clientSocket, &list);
-
-
-    //     Request *req = req_bucket+i;
-    //     req->id = i; // @Todo: set before this
-    //     req->connected = true;
-    //     req->socket = clientSocket;
-        
-    //     print("New connection! req: [%p] ; socket: %lld\n", req, req->socket);
-
-    //     while (true) {
-    //         int err;
-    //         int r = recv(req->socket, &*req->buf, 4096-1, 0);
-    //         err = WSAGetLastError();
-            
-    //         if (r == 0) {
-    //             fprintf(stderr, "Connection is closed!");
-    //             return false;
-    //         } else if (err == WSAEWOULDBLOCK) {
-    //             // print("WSAEWOULDBLOCK\n");
-    //             continue;            
-    //         } else if (r == SOCKET_ERROR) {
-    //             std::cerr << "SOCKET ERROR. Error code: " <<  WSAGetLastError() << std::endl;
-    //             return false;
-    //         }
-            
-    //         if (req->state != HTTP_STATE_HEADER_PARSED) {
-    //             auto buf = String(req->buf, r);
-    //             int end = find_index_from_left(buf, CRLF CRLF);
-    //             if (end == -1) {
-    //                 printf("Not found the end of the http header, probably isn't arrived. Size: %d\n", r);
-    //                 break;
-    //             }
-                
-    //             String body;
-    //             String header = split(buf, CRLF CRLF, &body);
-                
-    //             print("\n\n---HTTP_HEADER--------\n\n");
-    //             print(SFMT, SARG(header));
-    //             print("\n\n---HTTP_HEADER_END----\n\n");
-    
-    //             print("> buf: %d ; header: %d ; body: %d\n", buf.count, header.count, body.count);
-
-    //             req->state = HTTP_STATE_HEADER_PARSED;
-                
-    //             print("exit...\n");
-    //             exit(0);
-    //         }
-    //     }
-
-        // while (true) {
-        //     int err;
-        //     ZERO_MEMORY(tmp_buf, sizeof(tmp_buf));
-            
-        //     // int sr = select(1, &list, NULL, NULL, &tt);
-        //     // err = WSAGetLastError();
-        //     int r = recv(req.socket, tmp_buf, 4096-1, 0);
-        //     err = WSAGetLastError();
-        //     // print("> recv: %d ; err: %d\n", r, err);
-            
-        //     if (r == 0) {
-        //         fprintf(stderr, "Connection is closed!");
-        //         return false;
-        //     } else if (err == WSAEWOULDBLOCK) {
-        //         // print("WSAEWOULDBLOCK\n");
-        //         continue;            
-        //     } else if (r == SOCKET_ERROR) {
-        //         fprintf(stderr, "SOCKET ERROR - Connection is closed!");
-        //         std::cerr << "SOCKET ERROR. Error code: " <<  WSAGetLastError() << std::endl;
-        //         return false;
-        //     }
-
-        //     join(&req.buf, tmp_buf);
-            
-        //     if (!(req.state & HTTP_STATE_HEADER_PARSED)) {
-        //         // Locate end of the http header    
-        //         int end = find_index_from_left(req.buf, CRLF CRLF);
-        //         if (end != -1) {
-        //             req.raw_header = chop(req.buf, end, &req.raw_body);
-        //             req.raw_body = advance(req.raw_body, strlen(CRLF CRLF));
-                    
-        //             print("\n\n---HTTP_HEADER--------\n\n");
-        //             print(SFMT, SARG(req.raw_header));
-        //             print("\n\n---HTTP_HEADER_END----\n\n");
-
-        //             print("> buf: %d ; header: %d ; body: %d\n", req.buf.count, req.raw_header.count, req.raw_body.count);
-        //             req.state = HTTP_STATE_HEADER_PARSED;
-                    
-        //             bool ok = true;
-        //             bool has_more_line = true;
-        //             String h = req.raw_header;
-        //             String line; 
-        //             String key; 
-        //             String val;
-        //             line = split(h, CRLF, &h, &has_more_line);
-        //             assert(has_more_line);
-                    
-        //             if (string_starts_with_and_step(&line, "GET ")) {
-        //                 req.method = Http_Method_Get;
-        //             } else if (string_starts_with_and_step(&line, "POST ")) {
-        //                 req.method = Http_Method_Post;
-        //             } else if (string_starts_with_and_step(&line, "DELETE ")) {
-        //                 req.method = Http_Method_Delete;
-        //             } else {
-        //                 ASSERT(0, "Http method not supported! -> " SFMT "\n", SARG(line));
-        //             }
-                    
-        //             {
-        //                 req.path = split(line, " ", &line, &ok);
-        //                 ASSERT(ok, "Invalid http header! Malformed path. -> " SFMT "\n", SARG(line)); // can be?
-        //                 ASSERT(line == HTTP_1_1, "Invalid http header! Protocol not supported. -> " SFMT "\n", SARG(line));
-        //                 req.protocol = line;
-        //             }
-                    
-        //             while (has_more_line) {
-        //                 line = split(h, CRLF, &h, &has_more_line);
-        //                 ASSERT(line.count != 0, "Invalid http header!"); // can be?
-
-        //                 ok = http_header_parse_line(line, &key, &val);
-        //                 ASSERT(ok, "Failed to parse header line: " SFMT "\n", SARG(line));
-                        
-        //                 if (key == "Content-Type") {
-        //                     bool other_half_is_set = false;
-        //                     String other_half;
-        //                     val = split(val, "; ", &other_half, &other_half_is_set);
-        //                     if (other_half_is_set) {
-        //                         // @Todo
-        //                         // printf("Other half of Content-Type: |" SFMT "|\n", SARG(other_half));
-        //                     }
-                            
-        //                     req.content_type = content_type_str_to_enum(val);
-        //                     if (req.content_type == Mime_None) {
-        //                         printf("Content-Type not supported: " SFMT " \n", SARG(val));
-        //                     }
-                            
-        //                     // printf("Content-Type: " SFMT " (%d)\n", SARG(val), req.content_type);
-        //                 } 
-        //                 else if (key == "Content-Length") {
-        //                     req.content_length = string_to_int(val);
-        //                     ASSERT(errno == 0, "Failed to convert string to int! Line: |" SFMT "|\n", SARG(line));
-        //                     // printf("Content-Length: %d\n", req.content_length);
-        //                 }
-
-        //                 print("> key: |" SFMT "| ; val: |" SFMT "| \n", SARG(key), SARG(val));
-        //             }
-                    
-        //         }
-            
-        //         print("");
-        //     } 
-        //     else if (req.state & HTTP_STATE_HEADER_PARSED) {
-                
-        //     }
-            
-            
-        // }   
- 
-        // Close the client socket
-        // closesocket(clientSocket);
-        // print("Connection closed! req: [%p] ; fd: %lld\n", req, req->socket);
-    // }
- 
-    // Close the listening socket
-    // closesocket(listenSocket);
- 
-    // Cleanup Winsock
-    // WSACleanup();
 }

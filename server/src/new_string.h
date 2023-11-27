@@ -16,20 +16,16 @@
 #define SARGC(__s, __c) (int)__c, (__s).data 
 // Usage: printf("This is an example: " SFMT "\n", SARG(value));
 
-#define SCHAR(s) (*s.data)
-
 const int STRING_MEM_ALIGN = 8;
 
 struct String {
-    // static constexpr const unsigned int byte_padding = 8;
-
     char *_sdata = nullptr; // the 'data' ptr can be vary, so we keep the initial data ptr
     char *data = nullptr;
-    s64 count;
+    s64 count = 0;
     
     char *alloc_location = nullptr; // If allocated on the heap
-    s64 allocated_size;
-    s64 used_size; // the count can vary
+    s64 allocated_size = 0;
+    s64 used_size = 0; // the count can vary
 
     String () {}
     
@@ -80,7 +76,6 @@ inline void free(String *s)
         s->used_size = 0;
     }
 }
-
 
 s64 find_index_from_left(String a, char *_b)
 {
@@ -136,13 +131,8 @@ inline void advance(String *s, unsigned int step = 1)
 inline String chop(String s, int at, String *rem = NULL)
 {
     assert(s.count > at);
-    
-    if (rem) {
-        *rem = advance(s, at);
-    }
-    
+    if (rem) *rem = advance(s, at);
     s.count = at;
-    
     return s;
 }
 
@@ -181,10 +171,10 @@ void alloc(String *s, s64 amount, float headroom_percent = 1.5)
     s->data = s->alloc_location + backup_data_offset;
 }
 
-void join(String *a, char *b)
+inline void join(String *a, char *b, s64 b_len = -1)
 {
     assert(b);
-    auto b_len = strlen(b);
+    b_len = b_len <= 0 ? strlen(b) : b_len;
     if (b_len == 0) return;
     
     if (a->used_size + b_len >= a->allocated_size) {
@@ -198,9 +188,23 @@ void join(String *a, char *b)
     a->used_size += b_len;
 }
 
+inline void join(String* a, String* b)
+{
+    join(a, b->data, b->count);
+}
+
 inline void string_switch_to_heap(String *s)
 {
     join(s, s->data);
+}
+
+inline String string_create(s64 size = 0)
+{
+    String s;
+    if (size <= 0) return s;
+    alloc(&s, size);
+    
+    return s;
 }
 
 inline char *string_to_new_cstr(String s)
@@ -214,6 +218,8 @@ inline char *string_to_new_cstr(String s)
 
 bool string_equal(String a, String b)
 {
+    // @Speed: use SIMD and padding?
+
     if (a.count != b.count) return false;
 
     for (int i = 0; i < a.count; i++) {
@@ -273,7 +279,7 @@ inline String string_trim_white(String s)
 inline int string_to_int(String s, String *remained = nullptr, int base = 0)
 {
     // @Todo: return the remained data
-    // @Speed: Make sure the s.data+1 is '\0'
+    // @XXX: Make sure the s.data+1 is '\0'
     char *temp = string_to_new_cstr(s);
     int r = strtol(s.data, nullptr, base);
     free(temp);
@@ -284,7 +290,7 @@ inline int string_to_int(String s, String *remained = nullptr, int base = 0)
 inline float string_to_float(String s, String *remained = nullptr)
 {
     // @Todo: return the remained data
-    // @Speed: Make sure the s.data+1 is '\0'
+    // @XXX: Make sure the s.data+1 is '\0'
     char *temp = string_to_new_cstr(s);
     float r = strtof(temp, nullptr);
     free(temp);
