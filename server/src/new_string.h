@@ -18,16 +18,18 @@
 
 #define SCHAR(s) (*s.data)
 
+const int STRING_MEM_ALIGN = 8;
+
 struct String {
     // static constexpr const unsigned int byte_padding = 8;
 
     char *_sdata = nullptr; // the 'data' ptr can be vary, so we keep the initial data ptr
     char *data = nullptr;
-    int count;
+    s64 count;
     
     char *alloc_location = nullptr; // If allocated on the heap
-    int allocated_size;
-    int used_size;
+    s64 allocated_size;
+    s64 used_size; // the count can vary
 
     String () {}
     
@@ -38,6 +40,14 @@ struct String {
         count     = strlen(s);
         used_size = count;
     }
+    
+    String (const char *s, u32 size)
+    {
+        data      = (char *)s;
+        _sdata    = data;
+        count     = size;
+        used_size = count;
+    }
 
     inline void operator=(const char *rhs)
     {
@@ -45,27 +55,9 @@ struct String {
         memcpy(&new_s, this, sizeof(String));
     }
     
-    void to_heap()
-    {
-        if (!alloc_location || used_size == 0) return;
-        
-        alloc_location = (char *)malloc(used_size);
-        assert(alloc_location);
-        memcpy(alloc_location, _sdata, used_size);
-
-        int offset = data - _sdata; 
-        _sdata = alloc_location;
-        data = _sdata + offset;
-    }
-    
 };
 
-inline char schar(String &s)
-{
-    return *s.data;
-}
-
-void free(String s)
+inline void free(String s)
 {
     if (s.alloc_location != nullptr) {
         free(s.alloc_location);
@@ -77,7 +69,20 @@ void free(String s)
     }
 }
 
-int find_index_from_left(String a, char *_b)
+inline void free(String *s) 
+{
+    if (s->alloc_location != nullptr) {
+        free(s->alloc_location);
+        s->alloc_location = nullptr;
+        s->data = nullptr;
+        s->_sdata = nullptr;
+        s->count = 0;
+        s->used_size = 0;
+    }
+}
+
+
+s64 find_index_from_left(String a, char *_b)
 {
     if (_b == NULL) return -1;
     
@@ -86,16 +91,16 @@ int find_index_from_left(String a, char *_b)
     
     // @Speed: SIMD or just align the memory properly
     if (a.count == b.count) {
-        for (int i = 0; i < a.count; i++) {
+        for (s64 i = 0; i < a.count; i++) {
             if (a.data[i] != b.data[i]) return -1;
         }
         return 0;
     } else {
-        for (int i = 0; i < a.count; i++) {
+        for (s64 i = 0; i < a.count; i++) {
             if (a.data[i] == b.data[0]) {
                 if (i + b.count-1 >= a.count) return -1;
                 
-                for (int j = 0; j < b.count; j++) {
+                for (s64 j = 0; j < b.count; j++) {
                     if (a.data[i+j] != b.data[j]) {
                         goto _not_found;
                     }
@@ -158,39 +163,47 @@ inline String split(String s, char *delimeter, String *rem = nullptr, bool *succ
     return r;
 }
 
+void alloc(String *s, s64 amount, float headroom_percent = 1.5)
+{
+    assert(amount >= 0);
+    if (amount == 0) return;
+
+    // The 'data' can moved by 'advance' procedures, so we need to restore the location if
+    // the realloc is "moved" the memory to elsewhere. 
+    u64 backup_data_offset = s->alloc_location ? (s->data - s->alloc_location) : 0;
+    
+    s64 new_size = (s->used_size + amount) * headroom_percent;
+    s->alloc_location = (char *)realloc(s->alloc_location, new_size);
+    assert(s->alloc_location);
+    s->allocated_size = new_size;
+    
+    s->_sdata = s->alloc_location;
+    s->data = s->alloc_location + backup_data_offset;
+}
+
 void join(String *a, char *b)
 {
     assert(b);
     auto b_len = strlen(b);
     if (b_len == 0) return;
     
-    if (a->alloc_location == nullptr) {
-        a->to_heap();
-    }
-    
     if (a->used_size + b_len >= a->allocated_size) {
-        int offset = 0;
-        if (a->alloc_location) {
-            offset = a->data - a->alloc_location;
-        }
-        
-        int new_size = (a->used_size + b_len) * 1.5;
-    
-        auto old_ptr = a->alloc_location;
-        a->alloc_location = (char *)realloc(a->alloc_location, new_size);
-        assert(a->alloc_location);
-        a->allocated_size = new_size;
-        
-        a->_sdata = a->alloc_location;
-        a->data = a->_sdata + offset;        
+        alloc(a, b_len);
     }
     
-    memcpy(a->data + a->used_size, b, b_len);
+    memcpy_s(a->data + a->used_size, a->allocated_size - a->used_size, b, b_len);
+    assert(errno == 0);
+    
     a->count += b_len;
     a->used_size += b_len;
 }
 
-inline char *string_to_cstr(String s)
+inline void string_switch_to_heap(String *s)
+{
+    join(s, s->data);
+}
+
+inline char *string_to_new_cstr(String s)
 {
     char *c_str = (char *)malloc(s.count+1);
     assert(c_str);
@@ -261,7 +274,7 @@ inline int string_to_int(String s, String *remained = nullptr, int base = 0)
 {
     // @Todo: return the remained data
     // @Speed: Make sure the s.data+1 is '\0'
-    char *temp = string_to_cstr(s);
+    char *temp = string_to_new_cstr(s);
     int r = strtol(s.data, nullptr, base);
     free(temp);
     
@@ -272,7 +285,7 @@ inline float string_to_float(String s, String *remained = nullptr)
 {
     // @Todo: return the remained data
     // @Speed: Make sure the s.data+1 is '\0'
-    char *temp = string_to_cstr(s);
+    char *temp = string_to_new_cstr(s);
     float r = strtof(temp, nullptr);
     free(temp);
 
