@@ -16,8 +16,6 @@
 #define SARGC(__s, __c) (int)__c, (__s).data 
 // Usage: printf("This is an example: " SFMT "\n", SARG(value));
 
-const int STRING_MEM_ALIGN = 8;
-
 struct String {
     char *_sdata = nullptr; // the 'data' ptr can be vary, so we keep the initial data ptr
     char *data = nullptr;
@@ -136,21 +134,29 @@ inline String chop(String s, int at, String *rem = NULL)
     return s;
 }
 
-inline String split(String s, char *delimeter, String *rem = nullptr, bool *success = nullptr)
+inline String split(String s, char *delimeter, String *rem = nullptr, bool *found = nullptr)
 {
     assert(delimeter);
     
     int at = find_index_from_left(s, delimeter);
     if (at == -1) {
-        if (success != nullptr) *success = false;
+        if (found != nullptr) *found = false;
         return s;
     }
     
     String r = chop(s, at, rem);
     if (rem) *rem = advance(*rem, strlen(delimeter));
-    if (success != nullptr) *success = true;
+    if (found != nullptr) *found = true;
     
     return r;
+}
+
+// @Todo: Explain how it works, or just give it a better name than this
+//  -> example: String line = split(header, CRLF, &header, &found);
+inline String split_and_keep(String *s, char *delimeter, bool *found = nullptr)
+{
+    assert(s && delimeter);
+    return split(*s, delimeter, s, found);
 }
 
 void alloc(String *s, s64 amount, float headroom_percent = 1.5)
@@ -281,11 +287,21 @@ inline int string_to_int(String s, String *remained = nullptr, int base = 0)
     // @Todo: return the remained data
     // @XXX: Make sure the s.data+1 is '\0'
     char *temp = string_to_new_cstr(s);
-    int r = strtol(s.data, nullptr, base);
+    int r = strtol(temp, nullptr, base);
     free(temp);
     
     return r;
 }
+
+inline int string_to_int(String s, bool *success, int base = 0)
+{
+    assert(success);
+    
+    int r = string_to_int(s);
+    if (r == 0 && string_equal_cstr(s, "0") == false) *success = false;
+    
+    return r;
+} 
 
 inline float string_to_float(String s, String *remained = nullptr)
 {

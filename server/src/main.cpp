@@ -59,12 +59,7 @@ bool server_create(Server *s, int port)
     assert(s->clients);
     for (auto i = 0; i < MAX_CLIENTS; i++) s->clients[i].id = i;
     memset(s->free_clients, 1, MAX_CLIENTS);
- 
-    // @Temporary?
-    FD_ZERO(&s->waiting);
-    FD_SET(s->socket, &s->waiting);
-    s->waiting_ttl.tv_sec = 60;
-    
+     
     return true;
 }
 
@@ -153,7 +148,8 @@ bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
 bool http_parse_header(Request *c)
 {
     auto buf_size = sizeof(c->header_buf);
-    while (1) {
+    
+    while (true) {
         int r = recv(c->socket, c->header_buf, buf_size-1, 0);
         int err = WSAGetLastError();
     
@@ -170,15 +166,66 @@ bool http_parse_header(Request *c)
         }
         
         // @Speed
+        // String buf = String(c->header_buf);
+        // int end = find_index_from_left(buf, CRLF CRLF);
+        // if (end == -1) {
+        //     printf("Not found the end of the http header, probably isn't arrived. Size: %d\n", r);
+        //     return false;
+        // }
+
+        bool found = false;
+        
         String buf = String(c->header_buf);
-        int end = find_index_from_left(buf, CRLF CRLF);
-        if (end == -1) {
-            printf("Not found the end of the http header, probably isn't arrived. Size: %d\n", r);
+        String body;
+        String header = split(buf, CRLF CRLF, &body, &found);
+        if (!found) {
+            printf("Not found the end of the http header!\n");
             return false;
         }
         
-        String body;
-        String header = split(buf, CRLF CRLF, &body);
+        String line = split_and_keep(&header, CRLF, &found);
+        if (!found) return false;
+        {
+            String method = split_and_keep(&line, " ", &found);
+            if (!found) return false;
+            printf("Method: |" SFMT "|\n", SARG(method));
+            
+            String path = split_and_keep(&line, " ", &found);
+            if (!found) return false;
+            printf("Path: |" SFMT "|\n", SARG(path));
+            
+            String protocol = line;
+            printf("Protocol: |" SFMT "|\n", SARG(protocol));
+            
+            printf("\n-------------\n");
+        }
+        
+        do {
+            line = split_and_keep(&header, CRLF, &found);
+            
+            String key, value;
+            if (!http_header_parse_line(line, &key, &value)) {
+                fprintf(stderr, "Failed to parse header line -> " SFMT "\n", SARG(line));
+                return false;
+            }
+            
+            if (key == "Content-Type") {
+                c->content_type = content_type_str_to_enum(value);
+                if (c->content_type == Mime_None) {
+                    printf("Content type not handled as enum -> " SFMT "\n", SARG(value));
+                }
+                
+            } else if (key == "Content-Length") {
+                bool to_int_ok = true;
+                c->content_length = string_to_int(value, &to_int_ok);
+                
+                if (!to_int_ok) {
+                    fprintf(stderr, "Failed to parse content length value to int -> " SFMT "\n", SARG(value));
+                    return false;
+                }
+            }
+            
+        } while (found);
         
         print("\n\n---HTTP_HEADER--------\n\n");
         print(SFMT, SARG(header));
@@ -203,18 +250,18 @@ inline void http_header_finish(String *buf)
     join(buf, CRLF CRLF);
 }
 
-String http_header_create(Http::Response_Status status)
+String http_header_create(Http_Response_Status status)
 {
     String h = string_create(4096);
 
     switch (status) {
-        case Http::OK:
+        case HTTP_OK:
             http_header_append(&h, HTTP_1_1 " 200 Ok");
         break;
-        case Http::NOT_FOUND: 
+        case HTTP_NOT_FOUND: 
             http_header_append(&h, HTTP_1_1 " 404 Not Found");
         break;
-        case Http::BAD_REQUEST: 
+        case HTTP_BAD_REQUEST: 
             http_header_append(&h, HTTP_1_1 " 400 Bad Request");
         break;
         default:
@@ -224,26 +271,58 @@ String http_header_create(Http::Response_Status status)
     return h;
 }
 
-#define SERVER_WAIT_FOR_INCOMMING_CONNECTIONS(__server) \
-    do {\
-        int __sr = select(1, &__server->waiting, NULL, NULL, &__server->waiting_ttl); \
-        if (__sr == SOCKET_ERROR) { \
-            fprintf(stderr, "select() is failed. Error code: %d\n", WSAGetLastError()); \
-            continue; \
-        } else if (__sr == 0) { \
-            fprintf(stderr, "What is this?\n"); \
-            continue; \
-        } \
-    } while(0); \
-
 void server_listen(Server *s)
 {
-    s->running = true;
     printf("Server listening at %d...\n", s->port);
+    
+    s->running = true;
 
+    fd_set _read_fds, read_fds;
+    TIMEVAL _polltime, polltime;
+    FD_ZERO(&_read_fds);
+    FD_SET(s->socket, &_read_fds);
+    _polltime.tv_sec = 10;
+    
     while (s->running) {
-        SERVER_WAIT_FOR_INCOMMING_CONNECTIONS(s);
-
+        read_fds = _read_fds;
+        polltime = _polltime;
+        
+        int r = select(1, &read_fds, NULL, NULL, &polltime);
+        if (r == SOCKET_ERROR) {
+            fprintf(stderr, "select() is failed. Error code: %d -> ", WSAGetLastError());
+            switch (WSAGetLastError()) {
+                case WSAEFAULT:
+                    fprintf(stderr, "WSAEFAULT\n");
+                break;
+                case WSAENETDOWN:
+                    fprintf(stderr, "WSAENETDOWN\n");
+                break;
+                case WSANOTINITIALISED:
+                    fprintf(stderr, "WSANOTINITIALISED\n");
+                break;                
+                case WSAEINVAL:
+                    fprintf(stderr, "WSAEINVAL\n");
+                break;                
+                case WSAEINTR:
+                    fprintf(stderr, "WSAEINTR\n");
+                break;
+                case WSAEINPROGRESS:
+                    fprintf(stderr, "WSAEINPROGRESS\n");
+                break;
+                case WSAENOTSOCK:
+                    fprintf(stderr, "WSAENOTSOCK\n");
+                break;                
+            }
+            
+            server_shutdown(s, true);
+            
+            return;
+            
+        } else if (r == 0) {
+            // select() timeout, continue...        
+            continue;
+        }
+    
         Request *c = nullptr;
         for (auto i = 0; i < MAX_CLIENTS; i++) {
             if (s->free_clients[i]) {
@@ -272,18 +351,19 @@ void server_listen(Server *s)
             continue;
         }
         
-        String header = http_header_create(Http::OK);
+        String header = http_header_create(HTTP_OK);
         http_header_append(&header, "Content-Length: 0");
+        http_header_append(&header, "Connection: close");
         http_header_finish(&header);
         
         print("\n\n---RESPONSE--------\n\n");
         print(SFMT, SARG(header));
         print("\n\n---RESPONSE_END--------\n\n");
         
-        success = send_to_client(c, &header);
-        free(&header);
-        
+        send_to_client(c, &header);        
         close_client(s, c);
+        
+        free(&header);
     }
 }
 

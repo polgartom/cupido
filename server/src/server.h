@@ -39,44 +39,41 @@ enum Mime_Type {
     Mime_Count
 };
 
-namespace Http {
-    enum Method {
-        METHOD_NONE = 0,
-        
-        METHOD_GET,
-        METHOD_POST,
-        METHOD_DELETE,
-        
-        METHOD_COUNT,
-    };
+enum Http_Method {
+    HTTP_METHOD_NONE = 0,
     
-    enum Response_Status {
-        OK                              = 200,
-        CREATED                         = 201,
-        ACCEPTED                        = 202,
-        NO_CONTENT                      = 204,
-        MOVED_PERMANENTLY               = 301,
-        FOUND                           = 302,
-        NOT_MODIFIED                    = 304,
-        TEMPORARY_REDIRECT              = 307,
-        PERMANENT_REDIRECT              = 308,
+    HTTP_METHOD_GET,
+    HTTP_METHOD_POST,
+    HTTP_METHOD_DELETE,
     
-        BAD_REQUEST                     = 400,
-        UNAUTHORIZED                    = 401,
-        FORBIDDEN                       = 403,
-        NOT_FOUND                       = 404,
-        METHOD_NOT_ALLOWED              = 405,
-        CONFLICT                        = 409,
-        PAYLOAD_TOO_LARGE               = 413,
-        UNSUPPORTED_MEDIA_TYPE          = 415,
-        UNPROCESSABLE_ENTITY            = 422,
-        REQUEST_HEADER_FIELDS_TOO_LARGE = 431,
-    
-        INTERNAL_SERVER_ERROR           = 500,
-        NOT_IMPLEMENTED                 = 501,
-        HTTP_VERSION_NOT_SUPPORTED      = 505
-    };
-    
+    HTTP_METHOD_COUNT,
+};
+
+enum Http_Response_Status {
+    HTTP_OK                              = 200,
+    HTTP_CREATED                         = 201,
+    HTTP_ACCEPTED                        = 202,
+    HTTP_NO_CONTENT                      = 204,
+    HTTP_MOVED_PERMANENTLY               = 301,
+    HTTP_FOUND                           = 302,
+    HTTP_NOT_MODIFIED                    = 304,
+    HTTP_TEMPORARY_REDIRECT              = 307,
+    HTTP_PERMANENT_REDIRECT              = 308,
+
+    HTTP_BAD_REQUEST                     = 400,
+    HTTP_UNAUTHORIZED                    = 401,
+    HTTP_FORBIDDEN                       = 403,
+    HTTP_NOT_FOUND                       = 404,
+    HTTP_METHOD_NOT_ALLOWED              = 405,
+    HTTP_CONFLICT                        = 409,
+    HTTP_PAYLOAD_TOO_LARGE               = 413,
+    HTTP_UNSUPPORTED_MEDIA_TYPE          = 415,
+    HTTP_UNPROCESSABLE_ENTITY            = 422,
+    HTTP_REQUEST_HEADER_FIELDS_TOO_LARGE = 431,
+
+    HTTP_INTERNAL_SERVER_ERROR           = 500,
+    HTTP_NOT_IMPLEMENTED                 = 501,
+    HTTP_HTTP_VERSION_NOT_SUPPORTED      = 505
 };
 
 enum Http_Request_State {
@@ -96,7 +93,7 @@ struct Request {
     // @Todo: Union http stuffs? 
     Http_Request_State state;
     
-    Http::Method method;
+    Http_Response_Status method;
     String path;
     String protocol;
     
@@ -113,9 +110,6 @@ struct Server {
     int port;
     bool running = false; 
     
-    fd_set waiting; // @Cleanup @Temporary
-    TIMEVAL waiting_ttl;
-
     Request *clients;
     bool    free_clients[MAX_CLIENTS]; // SoA | size: MAX_CLIENTS
 };
