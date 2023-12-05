@@ -95,12 +95,12 @@ inline void close_client(Server *s, Request *c)
         ASSERT(closesocket(c->socket) == 0, "Failed to close the client socket!", c->socket);
         s->free_clients[c->id] = true;
         
-        printf("[client(%lld)]: Connection closed!\n", c->socket);
+        printf("[%lld/%p]: Connection closed!\n", c->socket, c);
     }
     
     ZERO_MEMORY(c, sizeof(Request));
     
-    printf("[request(%p)]: Cleared up!\n", c);
+    printf("[%lld/%p]: cleared with zeros!\n", c->socket, c);
 }
 
 bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
@@ -108,7 +108,7 @@ bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
     if (!c->connected) return false;
     if (at_once <= 0) at_once = buffer->count;
     
-    printf("[send/start]: len: %d ; at_once: %d\n", buffer->count, at_once);
+    // printf("[send/start]: len: %d ; at_once: %d\n", buffer->count, at_once);
     
     s64 remain = buffer->count;
     s64 sent  = 0;
@@ -122,7 +122,7 @@ bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
             fprintf(stderr, "Connection is closed!\n");
             return false;
         } else if (err == WSAEWOULDBLOCK) {
-            print("[send/progress]: WSAEWOULDBLOCK\n");
+            // print("[send/progress]: WSAEWOULDBLOCK\n");
             continue;        
         } else if (sent == SOCKET_ERROR) {
             // It is valid??
@@ -132,27 +132,24 @@ bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
 
         remain -= sent;
         
-        printf("[send/progress]: sent: %d ; remain: %d ; rate: %d\n", sent, remain, buffer->count, at_once);
+        // printf("[send/progress]: sent: %d ; remain: %d ; rate: %d\n", sent, remain, buffer->count, at_once);
         
-        if (remain < 0) {
-            ASSERT(remain < 0, "How can this happen?");
-            return false;
-        }
+        ASSERT(remain >= 0, "TOTAL FAIL!?");
     }
     
-    printf("[send/done]: OK!\n");
+    // printf("[send/done]: OK!\n");
     
     return true;
 }
 
 bool http_parse_header(Request *c)
 {
-    auto buf_size = sizeof(c->header_buf);
+    auto buf_size = sizeof(c->buf);
     
     while (true) {
-        int r = recv(c->socket, c->header_buf, buf_size-1, 0);
+        int r = recv(c->socket, c->buf, buf_size, 0);
         int err = WSAGetLastError();
-    
+        
         if (r == 0) {
             fprintf(stderr, "Connection is closed!");
             return false;
@@ -165,43 +162,42 @@ bool http_parse_header(Request *c)
             return false;
         }
         
-        // @Speed
-        // String buf = String(c->header_buf);
-        // int end = find_index_from_left(buf, CRLF CRLF);
-        // if (end == -1) {
-        //     printf("Not found the end of the http header, probably isn't arrived. Size: %d\n", r);
-        //     return false;
-        // }
-
         bool found = false;
+        String buf = String(c->buf, r);
+        c->header = split(buf, CRLF CRLF, &c->body, &found);
+        if (c->body.count != 0) {
+            printf("\nBODY\n" SFMT "\n\n", SARG(c->body));
+            ASSERT(c->body.count == 0, "Probably the body camed with the header? %ld\n", c->body.count);    
+        }
         
-        String buf = String(c->header_buf);
-        String body;
-        String header = split(buf, CRLF CRLF, &body, &found);
+        
         if (!found) {
             printf("Not found the end of the http header!\n");
             return false;
         }
         
-        String line = split_and_keep(&header, CRLF, &found);
+        printf("\n" SFMT "\n", SARG(c->header));
+        
+        String line = split_and_move(&c->header, CRLF, &found);
         if (!found) return false;
         {
-            String method = split_and_keep(&line, " ", &found);
+            String method = split_and_move(&line, " ", &found);
             if (!found) return false;
-            printf("Method: |" SFMT "|\n", SARG(method));
             
-            String path = split_and_keep(&line, " ", &found);
+            c->path = split_and_move(&line, " ", &found);
             if (!found) return false;
-            printf("Path: |" SFMT "|\n", SARG(path));
             
-            String protocol = line;
-            printf("Protocol: |" SFMT "|\n", SARG(protocol));
+            c->protocol = line;
+            if (c->protocol != HTTP_1_1) {
+                printf("Invalid protocol -> " SFMT "\n", SARG(c->protocol));
+                return false;
+            }
             
-            printf("\n-------------\n");
+            c->method = http_method_str_to_enum(method);
         }
         
         do {
-            line = split_and_keep(&header, CRLF, &found);
+            line = split_and_move(&c->header, CRLF, &found);
             
             String key, value;
             if (!http_header_parse_line(line, &key, &value)) {
@@ -220,19 +216,13 @@ bool http_parse_header(Request *c)
                 c->content_length = string_to_int(value, &to_int_ok);
                 
                 if (!to_int_ok) {
-                    fprintf(stderr, "Failed to parse content length value to int -> " SFMT "\n", SARG(value));
+                    fprintf(stderr, "Failed to parse Content-Length to int -> " SFMT "\n", SARG(value));
                     return false;
                 }
             }
             
         } while (found);
         
-        print("\n\n---HTTP_HEADER--------\n\n");
-        print(SFMT, SARG(header));
-        print("\n\n---HTTP_HEADER_END----\n\n");
-    
-        print("> buf: %d ; header: %d ; body: %d\n", buf.count, header.count, body.count);
-    
         c->state = HTTP_STATE_HEADER_PARSED;
         
         return true;
@@ -273,7 +263,7 @@ String http_header_create(Http_Response_Status status)
 
 void server_listen(Server *s)
 {
-    printf("Server listening at %d...\n", s->port);
+    printf("\n\nServer listening at %d...\n\n", s->port);
     
     s->running = true;
 
@@ -351,14 +341,52 @@ void server_listen(Server *s)
             continue;
         }
         
+        debug_print_request(c);
+        
+        // @Debug: Just for testing...
+        if (c->content_length) {
+            char buf[4096];
+            ZERO_MEMORY(buf, 4096);
+            snprintf(buf, 4096, ".\\%lld.tmp", c->socket);
+            FILE *fp = fopen(buf, "wb");
+            ASSERT(fp, "Failed to create file handler for %s!", buf);
+            
+            auto remain = c->content_length;
+            while (remain != 0) {
+                int r = recv(c->socket, buf, 4096, 0);
+                int err = WSAGetLastError();
+                
+                if (r == 0) {
+                    fprintf(stderr, "[%lld/%p]: Connection is closed!\n", c->socket, c);
+                    return;
+                } else if (err == WSAEWOULDBLOCK) {
+                    // print("WSAEWOULDBLOCK\n");
+                    continue;            
+                } else if (r == SOCKET_ERROR) {
+                    fprintf(stderr, "[%lld/%p]: SOCKET ERROR. Error code: %d\n", c->socket, c, WSAGetLastError());
+                    return;
+                }
+                
+                remain -= r;
+                ASSERT(remain >= 0, "TOTAL FAIL!?");
+                
+                size_t rr = fwrite(buf, 1, r, fp);
+                ASSERT(rr == (size_t)r, "[%lld/%p]: recv() -> %llu not equal to fwrite() -> %llu results\n", c->socket, c, (size_t)r, rr);
+            }
+            
+            printf("[%lld/%p]: body received successfully\n", c->socket, c);
+            
+            ASSERT(fclose(fp) == 0, "Failed to close file handler!");
+        }
+        
         String header = http_header_create(HTTP_OK);
         http_header_append(&header, "Content-Length: 0");
         http_header_append(&header, "Connection: close");
         http_header_finish(&header);
         
-        print("\n\n---RESPONSE--------\n\n");
-        print(SFMT, SARG(header));
-        print("\n\n---RESPONSE_END--------\n\n");
+        // print("\n\n---RESPONSE--------\n\n");
+        // print(SFMT, SARG(header));
+        // print("\n\n---RESPONSE_END--------\n\n");
         
         send_to_client(c, &header);        
         close_client(s, c);

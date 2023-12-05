@@ -153,7 +153,7 @@ inline String split(String s, char *delimeter, String *rem = nullptr, bool *foun
 
 // @Todo: Explain how it works, or just give it a better name than this
 //  -> example: String line = split(header, CRLF, &header, &found);
-inline String split_and_keep(String *s, char *delimeter, bool *found = nullptr)
+inline String split_and_move(String *s, char *delimeter, bool *found = nullptr)
 {
     assert(s && delimeter);
     return split(*s, delimeter, s, found);
@@ -222,7 +222,7 @@ inline char *string_to_new_cstr(String s)
     return c_str;
 }
 
-bool string_equal(String a, String b)
+inline bool string_equal(String a, String b)
 {
     // @Speed: use SIMD and padding?
 
@@ -332,6 +332,16 @@ inline bool operator==(String &lhs, String &rhs)
 inline bool operator==(String &lhs, char *rhs)
 {
     return string_equal_cstr(lhs, rhs);
+}
+
+inline bool operator!=(String &lhs, String &rhs)
+{
+    return string_equal(lhs, rhs) == false;
+}
+
+inline bool operator!=(String &lhs, char *rhs)
+{
+    return string_equal_cstr(lhs, rhs) == false;
 }
 
 #endif

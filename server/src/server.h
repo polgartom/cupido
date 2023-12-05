@@ -93,15 +93,15 @@ struct Request {
     // @Todo: Union http stuffs? 
     Http_Request_State state;
     
-    Http_Response_Status method;
+    Http_Method method;
     String path;
     String protocol;
     
     Mime_Type content_type;
     s32 content_length = -1;
     
-    // Buffer buf;
-    char header_buf[4096];
+    String header;
+    String body;
     char buf[4096];
 };
 
@@ -111,8 +111,33 @@ struct Server {
     bool running = false; 
     
     Request *clients;
-    bool    free_clients[MAX_CLIENTS]; // SoA | size: MAX_CLIENTS
+    bool    free_clients[MAX_CLIENTS];
 };
+
+void debug_print_request(Request *c)
+{
+    printf("[%lld/%p]: ", c->socket, c);
+    switch (c->method) {
+        case HTTP_METHOD_GET: printf("m: GET"); break;
+        case HTTP_METHOD_POST: printf("m: POST"); break;
+        case HTTP_METHOD_DELETE: printf("m: DELETE"); break;
+        default: printf(" ; m: unknown");
+    }
+
+    printf(" ; content-length: %d", c->content_length);
+    printf(" ; path: " SFMT, SARG(c->path));
+    
+    printf("\n");
+}
+
+Http_Method http_method_str_to_enum(String method)
+{
+    if (method == "GET")    return HTTP_METHOD_GET;
+    if (method == "POST")   return HTTP_METHOD_POST;
+    if (method == "DELETE") return HTTP_METHOD_DELETE;
+    
+    return HTTP_METHOD_NONE;
+}
 
 Mime_Type content_type_str_to_enum(String s)
 {
