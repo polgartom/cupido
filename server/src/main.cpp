@@ -271,7 +271,7 @@ void server_listen(Server *s)
     TIMEVAL _polltime, polltime;
     FD_ZERO(&_read_fds);
     FD_SET(s->socket, &_read_fds);
-    _polltime.tv_sec = 10;
+    _polltime.tv_sec = 10000;
     
     while (s->running) {
         read_fds = _read_fds;
@@ -379,14 +379,12 @@ void server_listen(Server *s)
             ASSERT(fclose(fp) == 0, "Failed to close file handler!");
         }
         
+        // Response
+        
         String header = http_header_create(HTTP_OK);
         http_header_append(&header, "Content-Length: 0");
         http_header_append(&header, "Connection: close");
-        http_header_finish(&header);
-        
-        // print("\n\n---RESPONSE--------\n\n");
-        // print(SFMT, SARG(header));
-        // print("\n\n---RESPONSE_END--------\n\n");
+        join(&header, CRLF CRLF);
         
         send_to_client(c, &header);        
         close_client(s, c);
