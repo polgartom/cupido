@@ -12,6 +12,8 @@
 
 #include <iostream>
 
+#include "defer.h"
+
 typedef char s8;
 typedef short s16;
 typedef int s32;
@@ -42,9 +44,31 @@ typedef unsigned long u64;
 #define CSTR_LEN(x) (x != NULL ? strlen(x) : 0)
 #define XSTR(x) #x
 
+#define BYTES_TO_KB(_bytes) ((_bytes) * 1024)
+#define BYTES_TO_MB(_bytes) (BYTES_TO_KB(_bytes) * 1024)
+#define BYTES_TO_GB(_bytes) (BYTES_TO_MB(_bytes) * 1024)
+
 #define print printf
 
 #include "new_string.h"
-#include "array.h"
+
+String read_entire_file(String fname, const char *mode)
+{
+    STRING_TO_CSTR_ALLOCA(fname, fname_cstr);
+    FILE *fp = fopen(fname_cstr, mode);
+    
+    ASSERT(fp, "Failed to open the file " SFMT " ; errno: %d\n", SARG(fname), errno); // @Temporary
+    fseek(fp, 0, SEEK_END);
+    size_t fsize = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    
+    String s = string_create(fsize);
+    s.count = fsize;
+    ASSERT(fread(s.data, 1, fsize, fp) == fsize, "");
+    
+    fclose(fp);
+    
+    return s;
+}
 
 #endif 

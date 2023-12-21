@@ -56,8 +56,8 @@ bool server_create(Server *s, int port)
     
     s->port = port;
     s->clients = (Request *)malloc(sizeof(Request) * MAX_CLIENTS);
-    assert(s->clients);
     for (auto i = 0; i < MAX_CLIENTS; i++) s->clients[i].id = i;
+    assert(s->clients);
     memset(s->free_clients, 1, MAX_CLIENTS);
      
     return true;
@@ -95,12 +95,10 @@ inline void close_client(Server *s, Request *c)
         ASSERT(closesocket(c->socket) == 0, "Failed to close the client socket!", c->socket);
         s->free_clients[c->id] = true;
         
-        printf("[%lld/%p]: Connection closed!\n", c->socket, c);
+        printf("#%lld: Connection closed!\n", c->socket);
     }
     
     ZERO_MEMORY(c, sizeof(Request));
-    
-    printf("[%lld/%p]: cleared with zeros!\n", c->socket, c);
 }
 
 bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
@@ -137,8 +135,6 @@ bool send_to_client(Request *c, String *buffer, s64 at_once = -1)
         ASSERT(remain >= 0, "TOTAL FAIL!?");
     }
     
-    // printf("[send/done]: OK!\n");
-    
     return true;
 }
 
@@ -170,13 +166,12 @@ bool http_parse_header(Request *c)
             ASSERT(c->body.count == 0, "Probably the body camed with the header? %ld\n", c->body.count);    
         }
         
-        
         if (!found) {
             printf("Not found the end of the http header!\n");
             return false;
         }
         
-        printf("\n" SFMT "\n", SARG(c->header));
+        printf("\n-------------------\nsocket: #%lld\n" SFMT "\n", c->socket, SARG(c->header));
         
         String line = split_and_move(&c->header, CRLF, &found);
         if (!found) return false;
@@ -254,11 +249,58 @@ String http_header_create(Http_Response_Status status)
         case HTTP_BAD_REQUEST: 
             http_header_append(&h, HTTP_1_1 " 400 Bad Request");
         break;
+        case HTTP_MOVED_PERMANENTLY: 
+            http_header_append(&h, HTTP_1_1 " 301 Moved Permanently");
+        break;
+        case HTTP_SEE_OTHER: 
+            http_header_append(&h, HTTP_1_1 " 303 See Other");
+        break;
+        case HTTP_TEMPORARY_REDIRECT: 
+            http_header_append(&h, HTTP_1_1 " 307 Temporary Redirect");
+        break;
+        case HTTP_PERMANENT_REDIRECT: 
+            http_header_append(&h, HTTP_1_1 " 308 Permanent Redirect");
+        break;
         default:
             ASSERT(0, "TODO more http header!\n");
     }
 
     return h;
+}
+
+void handle_request(Request *c)
+{
+    Http_Response_Status status = HTTP_OK;
+
+    if (c->method == HTTP_METHOD_POST) {
+        if (c->path == "/upload-photo") {
+        }
+
+        status = HTTP_SEE_OTHER;
+    } else {
+    }
+    
+    String header = http_header_create(status); 
+    http_header_append(&header, "Connection: close");
+    if (status == HTTP_TEMPORARY_REDIRECT) {
+        http_header_append(&header, "Location: /");
+    }
+
+    printf("\nResponse:\n" SFMT " \n", SARG(header));
+        
+    String body = read_entire_file("index.html", "r");
+    {
+        char cl[128] = {0};
+        snprintf(*&cl, 128, "Content-Length: %ld", body.count);
+        http_header_append(&header, cl);
+    }
+    
+    join(&header, CRLF);
+    send_to_client(c, &header);
+    send_to_client(c, &body);
+    
+    free(header);
+    free(body);
 }
 
 void server_listen(Server *s)
@@ -341,55 +383,48 @@ void server_listen(Server *s)
             continue;
         }
         
-        debug_print_request(c);
-        
-        // @Debug: Just for testing...
-        if (c->content_length) {
-            char buf[4096];
-            ZERO_MEMORY(buf, 4096);
-            snprintf(buf, 4096, ".\\%lld.tmp", c->socket);
-            FILE *fp = fopen(buf, "wb");
-            ASSERT(fp, "Failed to create file handler for %s!", buf);
-            
-            auto remain = c->content_length;
-            while (remain != 0) {
-                int r = recv(c->socket, buf, 4096, 0);
-                int err = WSAGetLastError();
+        // if (c->method == HTTP_METHOD_POST) {
+        //     print("POST -> cl: %ld\n", c->content_length);
+        //     // @Debug: Just for testing...
+        //     if (c->content_length) {
+        //         char buf[RECV_BUF_SIZE] = {0};
+        //         ZERO_MEMORY(buf, RECV_BUF_SIZE);
+        //         snprintf(buf, RECV_BUF_SIZE, ".\\%lld.tmp", c->socket);
+        //         FILE *fp = fopen(buf, "wb");
+        //         ASSERT(fp, "Failed to create file handler for %s!", buf);
                 
-                if (r == 0) {
-                    fprintf(stderr, "[%lld/%p]: Connection is closed!\n", c->socket, c);
-                    return;
-                } else if (err == WSAEWOULDBLOCK) {
-                    // print("WSAEWOULDBLOCK\n");
-                    continue;            
-                } else if (r == SOCKET_ERROR) {
-                    fprintf(stderr, "[%lld/%p]: SOCKET ERROR. Error code: %d\n", c->socket, c, WSAGetLastError());
-                    return;
-                }
+        //         auto remain = c->content_length;
+        //         while (remain != 0) {
+        //             int r = recv(c->socket, buf, RECV_BUF_SIZE, 0);
+        //             int err = WSAGetLastError();
+                    
+        //             if (r == 0) {
+        //                 fprintf(stderr, "#%lld: Connection is closed!\n", c->socket);
+        //                 return;
+        //             } else if (err == WSAEWOULDBLOCK) {
+        //                 // print("WSAEWOULDBLOCK\n");
+        //                 continue;            
+        //             } else if (r == SOCKET_ERROR) {
+        //                 fprintf(stderr, "#%lld: SOCKET ERROR. Error code: %d\n", c->socket, WSAGetLastError());
+        //                 return;
+        //             }
+                    
+        //             remain -= r;
+        //             ASSERT(remain >= 0, "TOTAL FAIL!?");
+        //             printf("r: %ld\n", remain);
+                    
+        //             size_t rr = fwrite(buf, 1, r, fp);
+        //             ASSERT(rr == (size_t)r, "#%lld: recv() -> %llu not equal to fwrite() -> %llu results\n", c->socket, (size_t)r, rr);
+        //         }
                 
-                remain -= r;
-                ASSERT(remain >= 0, "TOTAL FAIL!?");
+        //         printf("[%lld/%p]: body received successfully\n", c->socket, c);
                 
-                size_t rr = fwrite(buf, 1, r, fp);
-                ASSERT(rr == (size_t)r, "[%lld/%p]: recv() -> %llu not equal to fwrite() -> %llu results\n", c->socket, c, (size_t)r, rr);
-            }
-            
-            printf("[%lld/%p]: body received successfully\n", c->socket, c);
-            
-            ASSERT(fclose(fp) == 0, "Failed to close file handler!");
-        }
+        //         ASSERT(fclose(fp) == 0, "Failed to close file handler!");
+        //     }            
+        // }
         
-        // Response
-        
-        String header = http_header_create(HTTP_OK);
-        http_header_append(&header, "Content-Length: 0");
-        http_header_append(&header, "Connection: close");
-        join(&header, CRLF CRLF);
-        
-        send_to_client(c, &header);        
+        handle_request(c);
         close_client(s, c);
-        
-        free(&header);
     }
 }
 

@@ -1,10 +1,10 @@
 #ifndef H_NEW_STRING
 #define H_NEW_STRING
 
-#include <string.h>
-#include <assert.h>
-#include <stdlib.h>
-#include <cstdlib>
+// #include <string.h>
+// #include <assert.h>
+// #include <stdlib.h>
+// #include <cstdlib>
 
 #define IS_ALPHA(c) ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
 #define IS_DIGIT(c) (c >= '0' && c <= '9')
@@ -168,7 +168,7 @@ void alloc(String *s, s64 amount, float headroom_percent = 1.5)
     // the realloc is "moved" the memory to elsewhere. 
     u64 backup_data_offset = s->alloc_location ? (s->data - s->alloc_location) : 0;
     
-    s64 new_size = (s->used_size + amount) * headroom_percent;
+    s64 new_size = (s->used_size + amount) * headroom_percent + 1;
     s->alloc_location = (char *)realloc(s->alloc_location, new_size);
     assert(s->alloc_location);
     s->allocated_size = new_size;
@@ -221,6 +221,11 @@ inline char *string_to_new_cstr(String s)
     memcpy(c_str, s.data, s.count);
     return c_str;
 }
+
+#define STRING_TO_CSTR_ALLOCA(_s, _varname) \
+    char *_varname = (char *)_malloca(_s.count+1); \
+    assert(_varname); \
+    assert(memcpy_s(_varname, _s.count+1, _s.data, _s.count+1) == 0); \
 
 inline bool string_equal(String a, String b)
 {

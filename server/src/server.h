@@ -7,6 +7,8 @@
 #define CRLF_LEN constexpr(strlen(CRLF))
 #define HTTP_1_1 "HTTP/1.1"
 
+#define RECV_BUF_SIZE BYTES_TO_KB(256)
+
 const int MAX_CLIENTS = 128; 
 const int REQUEST_MAX_SIZE = (1024*1024*64);
 
@@ -56,6 +58,7 @@ enum Http_Response_Status {
     HTTP_NO_CONTENT                      = 204,
     HTTP_MOVED_PERMANENTLY               = 301,
     HTTP_FOUND                           = 302,
+    HTTP_SEE_OTHER                       = 303,
     HTTP_NOT_MODIFIED                    = 304,
     HTTP_TEMPORARY_REDIRECT              = 307,
     HTTP_PERMANENT_REDIRECT              = 308,
@@ -83,7 +86,7 @@ enum Http_Request_State {
 
 struct Request {
     u32 id;
-    
+
     bool connected;
     bool should_close;
     SOCKET socket = INVALID_SOCKET;
@@ -113,22 +116,6 @@ struct Server {
     Request *clients;
     bool    free_clients[MAX_CLIENTS];
 };
-
-void debug_print_request(Request *c)
-{
-    printf("[%lld/%p]: ", c->socket, c);
-    switch (c->method) {
-        case HTTP_METHOD_GET: printf("m: GET"); break;
-        case HTTP_METHOD_POST: printf("m: POST"); break;
-        case HTTP_METHOD_DELETE: printf("m: DELETE"); break;
-        default: printf(" ; m: unknown");
-    }
-
-    printf(" ; content-length: %d", c->content_length);
-    printf(" ; path: " SFMT, SARG(c->path));
-    
-    printf("\n");
-}
 
 Http_Method http_method_str_to_enum(String method)
 {
